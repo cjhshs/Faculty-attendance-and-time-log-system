@@ -1,0 +1,260 @@
+// Faculty Attendance and Time Log System — Prisma schema
+// See docs/Faculty_Attendance_System_Full_Spec.md
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Users, roles, permissions
+// ---------------------------------------------------------------------------
+
+model User {
+  id                 Int          @id @default(autoincrement())
+  name               String
+  username           String       @unique
+  passwordHash       String       @map("password_hash")
+  active             Boolean      @default(true)
+  mustChangePassword Boolean      @default(true) @map("must_change_password")
+  createdAt          DateTime     @default(now()) @map("created_at")
+  updatedAt          DateTime     @updatedAt @map("updated_at")
+  userRoles          UserRole[]
+  encodedAttendances Attendance[] @relation("EncodedBy")
+  savedSessions      AttendanceSession[] @relation("SavedBy")
+  auditLogs          AuditLog[]
+
+  @@map("users")
+}
+
+model Role {
+  id              Int              @id @default(autoincrement())
+  name            String           @unique
+  description     String?
+  canDelete       Boolean          @default(true) @map("can_delete")
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  userRoles       UserRole[]
+  rolePermissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id              Int              @id @default(autoincrement())
+  name            String           @unique
+  description     String?
+  createdAt       DateTime         @default(now()) @map("created_at")
+  updatedAt       DateTime         @updatedAt @map("updated_at")
+  rolePermissions RolePermission[]
+
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       Int        @map("role_id")
+  permissionId Int        @map("permission_id")
+  createdAt    DateTime   @default(now()) @map("created_at")
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model UserRole {
+  userId    Int      @map("user_id")
+  roleId    Int      @map("role_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([userId, roleId])
+  @@map("user_roles")
+}
+
+// ---------------------------------------------------------------------------
+// Master lists
+// ---------------------------------------------------------------------------
+
+model Faculty {
+  id        Int            @id @default(autoincrement())
+  fullName  String         @map("full_name")
+  surname   String
+  active    Boolean        @default(true)
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  slots     ScheduleSlot[]
+
+  @@index([active])
+  @@map("faculty")
+}
+
+model Course {
+  id        Int            @id @default(autoincrement())
+  code      String         @unique
+  name      String?
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  slots     ScheduleSlot[]
+  sessions  AttendanceSession[]
+
+  @@map("courses")
+}
+
+model Room {
+  id        Int            @id @default(autoincrement())
+  code      String         @unique
+  type      RoomType
+  createdAt DateTime       @default(now()) @map("created_at")
+  updatedAt DateTime       @updatedAt @map("updated_at")
+  slots     ScheduleSlot[]
+
+  @@map("rooms")
+}
+
+enum RoomType {
+  PHYSICAL @map("physical")
+  ONLINE   @map("online")
+  TBA      @map("tba")
+
+  @@map("room_type")
+}
+
+enum Mode {
+  FACE_TO_FACE @map("face-to-face")
+  ONLINE       @map("online")
+  LAB          @map("lab")
+
+  @@map("mode")
+}
+
+// ---------------------------------------------------------------------------
+// Schedule
+// ---------------------------------------------------------------------------
+
+model ScheduleSlot {
+  id          Int          @id @default(autoincrement())
+  cn          String       @map("class_number")
+  subject     String
+  description String?
+  units       Int          @default(0)
+  section     String?
+  yearLevel   String?      @map("year_level")
+  courseId    Int          @map("course_id")
+  facultyId   Int?         @map("faculty_id")
+  weekday     Int // 0=Sunday .. 6=Saturday
+  startTime   String       @map("start_time") // HH:mm
+  endTime     String       @map("end_time")   // HH:mm
+  roomId      Int          @map("room_id")
+  mode        Mode         @default(FACE_TO_FACE)
+  termType    String?      @map("term_type")
+  semester    String?
+  slotsInfo   String?      @map("slots") // enrollment "47/45" (informational)
+  createdAt   DateTime     @default(now()) @map("created_at")
+  updatedAt   DateTime     @updatedAt @map("updated_at")
+  course      Course       @relation(fields: [courseId], references: [id])
+  faculty     Faculty?     @relation(fields: [facultyId], references: [id])
+  room        Room         @relation(fields: [roomId], references: [id])
+  attendance  Attendance[]
+
+  @@index([facultyId])
+  @@index([courseId])
+  @@index([weekday, startTime, endTime])
+  @@map("schedule_slots")
+}
+
+// ---------------------------------------------------------------------------
+// Attendance
+// ---------------------------------------------------------------------------
+
+enum DayStatus {
+  DRAFT @map("draft")
+  SAVED @map("saved")
+
+  @@map("day_status")
+}
+
+// Scope completion: one row per (date, program). "Not encoded" = no row.
+model AttendanceSession {
+  id        Int          @id @default(autoincrement())
+  date      DateTime     @db.Date
+  courseId  Int          @map("course_id")
+  status    DayStatus    @default(DRAFT)
+  savedById Int?         @map("saved_by_id")
+  savedAt   DateTime?    @map("saved_at")
+  createdAt DateTime     @default(now()) @map("created_at")
+  updatedAt DateTime     @updatedAt @map("updated_at")
+  course    Course       @relation(fields: [courseId], references: [id])
+  savedBy   User?        @relation("SavedBy", fields: [savedById], references: [id])
+  records   Attendance[]
+
+  @@unique([date, courseId])
+  @@index([date])
+  @@map("attendance_sessions")
+}
+
+model Attendance {
+  id           Int          @id @default(autoincrement())
+  slotId       Int          @map("slot_id")
+  sessionId    Int?         @map("session_id")
+  date         DateTime     @db.Date
+  hourStart    String       @map("hour_start") // HH:mm — one row per scheduled hour
+  present      Boolean      @default(false)
+  reason       String?
+  roomOverride String?      @map("room_override")
+  encodedById  Int          @map("encoded_by")
+  encodedAt    DateTime     @default(now()) @map("encoded_at")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+  slot         ScheduleSlot @relation(fields: [slotId], references: [id])
+  session      AttendanceSession? @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  encodedBy    User         @relation("EncodedBy", fields: [encodedById], references: [id])
+
+  @@unique([slotId, date, hourStart])
+  @@index([date])
+  @@index([slotId, date])
+  @@map("attendance")
+}
+
+// ---------------------------------------------------------------------------
+// Calendar, settings, audit
+// ---------------------------------------------------------------------------
+
+model Holiday {
+  id        Int      @id @default(autoincrement())
+  date      DateTime @db.Date
+  label     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@unique([date])
+  @@index([date])
+  @@map("holidays")
+}
+
+model Settings {
+  id        Int      @id @default(autoincrement())
+  key       String   @unique
+  value     String
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("settings")
+}
+
+model AuditLog {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  action    String
+  details   String?
+  createdAt DateTime @default(now()) @map("created_at")
+  user      User     @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
+  @@map("audit_log")
+}
