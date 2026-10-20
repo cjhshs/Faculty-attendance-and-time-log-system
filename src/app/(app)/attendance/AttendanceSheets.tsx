@@ -1,6 +1,6 @@
 import { Fragment } from "react";
 import { buildProgramSheet, paginateColumns, type SheetSlot } from "@/lib/attendance-sheet";
-import { formatLong, formatTime12 } from "@/lib/dates";
+import { formatLong } from "@/lib/dates";
 import logo1 from "@/app/logo/logo1.png";
 import logo2 from "@/app/logo/logo2.png";
 

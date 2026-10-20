@@ -1,7 +1,6 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
-import { getCourses } from "@/lib/data";
 import { getSettings } from "@/lib/settings";
 import { buildSummary } from "@/lib/summary";
 import { prisma } from "@/lib/prisma";

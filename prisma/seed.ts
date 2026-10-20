@@ -8,6 +8,10 @@ import {
   STAFF_PERMISSIONS,
   PERMISSIONS,
 } from "../src/lib/permissions";
+import { programNameFor } from "../src/lib/program-names";
+
+// The college's programs, so a fresh install is usable without an Excel upload.
+const SEED_PROGRAMS = ["ACT", "BLIS", "BSCE-SE", "BSCS", "BSIT"];
 
 const prisma = new PrismaClient();
 
@@ -103,6 +107,18 @@ async function main() {
       update: {},
       create: { key, value },
     });
+  }
+
+  // Programs
+  for (const code of SEED_PROGRAMS) {
+    const name = programNameFor(code);
+    const existing = await prisma.course.findUnique({ where: { code } });
+    if (existing) {
+      if (!existing.name && name) await prisma.course.update({ where: { id: existing.id }, data: { name } });
+    } else {
+      await prisma.course.create({ data: { code, name } });
+      console.log(`Created program ${code} (${name}).`);
+    }
   }
 
   // First Dean account

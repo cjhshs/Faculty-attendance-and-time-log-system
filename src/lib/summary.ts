@@ -56,7 +56,6 @@ export async function buildSummary(
   term?: Term | null,
 ): Promise<SummaryResult> {
   const dates = eachDate(start, end);
-  const dateIsos = new Set(dates.map(iso));
 
   const slotFilter = {
     ...(courseId ? { courseId } : {}),

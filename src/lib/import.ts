@@ -3,6 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/lib/schedule-parser";
 import { normalizeSemester } from "@/lib/terms";
 import { timeToMinutes, WEEKDAY_NAMES } from "@/lib/dates";
+import { programNameFor } from "@/lib/program-names";
 
 export type ImportTargetTerm = { schoolYear: string; semester: string };
 
@@ -527,9 +528,14 @@ export async function writePlan(
     for (const code of courseCodes) {
       const existing = await tx.course.findUnique({ where: { code } });
       if (existing) {
+        // A program created by an earlier import had only a code; give it its
+        // real name as soon as we know it.
+        if (!existing.name && programNameFor(code)) {
+          await tx.course.update({ where: { id: existing.id }, data: { name: programNameFor(code)! } });
+        }
         courseMap.set(code, existing.id);
       } else {
-        const created = await tx.course.create({ data: { code } });
+        const created = await tx.course.create({ data: { code, name: programNameFor(code) } });
         courseMap.set(code, created.id);
         result.programsCreated++;
       }

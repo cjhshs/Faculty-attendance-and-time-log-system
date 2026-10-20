@@ -76,14 +76,16 @@ export default async function PrintPage({
       })),
   }));
 
-  // Reconcile each program's rendered grid against its schedule. A mismatch
-  // means a class would silently vanish from the sheet, so printing is blocked.
+  // Compare each program's rendered grid against its schedule. A mismatch means
+  // an instructor is booked in two classes at once, so the sheet cannot show both
+  // faithfully — staff are warned, but printing stays available so a class is
+  // never left without a paper sheet.
   const reconciliations = slotsByCourse.map((entry) => ({
     code: entry.course.code,
     result: reconcileProgramSheet(entry.slots),
   }));
   const failed = reconciliations.filter((r) => !r.result.ok);
-  const blocked = !holiday && failed.length > 0;
+  const hasConflicts = !holiday && failed.length > 0;
   const totalHours = reconciliations.reduce((n, r) => n + r.result.renderedHours, 0);
   const totalMeetings = reconciliations.reduce((n, r) => n + r.result.expectedMeetings, 0);
 
@@ -96,7 +98,7 @@ export default async function PrintPage({
             {activeTerm.schoolYear} · {activeTerm.semester}
           </p>
         </div>
-        {blocked ? null : <PrintButton label="Print sheet" />}
+        <PrintButton label="Print sheet" />
       </div>
 
       <form className="no-print card flex flex-wrap items-end gap-4" method="get">
@@ -138,12 +140,19 @@ export default async function PrintPage({
       <div className="no-print text-xs text-muted">
         Reconciliation — {selectedCourses.length} program(s), {totalMeetings} scheduled meeting(s),{" "}
         {totalHours} rendered class-hour(s).{" "}
-        {blocked ? "" : "All programs reconcile."}
+        {hasConflicts ? "" : "All programs reconcile."}
       </div>
 
-      {blocked ? (
-        <div className="no-print rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
-          <p className="font-semibold">Printing is blocked: the schedule does not reconcile.</p>
+      {hasConflicts ? (
+        <div className="no-print rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+          <p className="font-semibold">
+            Warning — some instructors are scheduled in two classes at the same time.
+          </p>
+          <p className="mt-1">
+            The sheet is printed anyway so nobody is left without a paper sheet, but only one of the
+            overlapping classes can appear in each check box. Print the sheet and confirm the affected
+            instructors with the registrar.
+          </p>
           <ul className="mt-2 list-disc space-y-1 pl-5">
             {failed.map((r) => (
               <li key={r.code}>
@@ -151,9 +160,6 @@ export default async function PrintPage({
               </li>
             ))}
           </ul>
-          <p className="mt-2">
-            Fix the overlapping or missing assignments for this date, then generate the sheet again.
-          </p>
         </div>
       ) : null}
 

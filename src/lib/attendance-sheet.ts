@@ -91,9 +91,16 @@ export function buildProgramSheet(slots: SheetSlot[]): ProgramSheet {
       ? `${(first.surname ?? "").toUpperCase()}${initial}`
       : (first.surname ?? "").toUpperCase();
 
+    // A slot covers exactly the hour labels `hoursOfRange` produced for it, so
+    // the grid never paints more boxes than the schedule can account for. Using
+    // a raw start<=h<end test here used to also match half-hour rows (08:30 …)
+    // contributed by neighbouring classes, inventing hours and making every
+    // program look like it had overlapping classes.
+    const hoursBySlot = new Map<number, Set<string>>();
+    for (const slot of list) hoursBySlot.set(slot.id, new Set(hoursOfRange(slot.start, slot.end)));
+
     const roomForHour = (hour: string): string | null => {
-      const h = timeToMinutes(hour);
-      const match = list.find((s) => timeToMinutes(s.start) <= h && h < timeToMinutes(s.end));
+      const match = list.find((s) => hoursBySlot.get(s.id)!.has(hour));
       return match ? match.roomCode : null;
     };
 
