@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getCurrentUser, hasPermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { commitPlan } from "@/lib/import";
+import { parseTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
 
 export const maxDuration = 60;
@@ -19,13 +20,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No file uploaded." }, { status: 400 });
   }
 
+  const target = parseTerm(String(form.get("schoolYear") ?? ""), String(form.get("semester") ?? ""));
+
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
-    const { result } = await commitPlan(buffer);
+    const { result } = await commitPlan(buffer, target, {
+      filename: file.name,
+      importedById: user.id,
+    });
+    const termLabel = target ? ` into ${target.schoolYear} ${target.semester}` : "";
     await writeAudit(
       user.id,
       "schedule.import",
-      `Imported ${file.name}: ${result.created} added, ${result.updated} updated, ${result.unchanged} unchanged.`,
+      `Imported ${file.name}${termLabel}: ${result.created} added, ${result.updated} updated, ${result.unchanged} unchanged.${result.batchId ? ` Batch #${result.batchId}.` : ""}`,
     );
     return NextResponse.json({ result });
   } catch (error) {

@@ -16,6 +16,11 @@ export type ParseError = {
   message: string;
 };
 
+// A single class meeting is at most a full working day. Anything longer is a
+// data-entry error (for example "06:00 AM-06:00" that was meant to be an hour),
+// so we flag it instead of importing an impossible block.
+export const MAX_MEETING_MINUTES = 8 * 60;
+
 const DAY_TOKENS: Record<string, number> = {
   su: 0,
   sun: 0,
@@ -43,6 +48,8 @@ const DAY_TOKENS: Record<string, number> = {
   sat: 6,
   saturday: 6,
 };
+
+const NON_ROOM = new Set(["ASYNC", "OLC", "TBA"]);
 
 export function normaliseFacultyName(input: string): string {
   return input.replace(/\s+/g, " ").trim();
@@ -76,12 +83,42 @@ function parseClock(hourMinutes: string, meridiem: string | undefined): string |
   return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
 }
 
-const ENTRY_REGEX =
-  /^([A-Za-z/]+)\s+(\d{1,2}:\d{2})\s*([APap][Mm])?\s*-\s*(\d{1,2}:\d{2})\s*([APap][Mm])?\s+(.+)$/;
+// Resolve the stored end time for one entry. The school form frequently omits
+// the meridiem on the end time ("04:00 PM-05:00"): inherit the start's period,
+// then roll forward 12 hours when the end lands before the start. A zero-length
+// or still-backwards interval is an error, never a guess.
+export function resolveEndTime(
+  start: string,
+  end: string,
+  endHasMeridiem: boolean,
+): { end: string } | { error: string } {
+  const startMin = timeToMinutes(start);
+  let endMin = timeToMinutes(end);
+  if (endMin === startMin) {
+    return { error: "End time must be after the start time." };
+  }
+  if (endMin < startMin) {
+    if (endHasMeridiem) {
+      return { error: "End time is before the start time." };
+    }
+    const shifted = endMin + 12 * 60;
+    if (shifted >= 24 * 60 || shifted <= startMin) {
+      return { error: "End time is before the start time." };
+    }
+    endMin = shifted;
+  }
+  if (endMin - startMin > MAX_MEETING_MINUTES) {
+    return { error: `Meeting is longer than ${MAX_MEETING_MINUTES / 60} hours.` };
+  }
+  return { end: minutesToTime(endMin) };
+}
 
-// Parse a single Schedule cell into collapsed class meetings.
-// Entries with the same weekday set + time are treated as alternate modes of
-// one meeting; the room is then chosen with the physical-first rule.
+const ENTRY_REGEX =
+  /^([A-Za-z]+(?:\/[A-Za-z]+)*)\s+(\d{1,2}:\d{2})\s*([APap][Mm])?\s*-\s*(\d{1,2}:\d{2})\s*([APap][Mm])?\s+(.+)$/;
+
+// Parse a single Schedule cell into collapsed class meetings. Entries that share
+// the same weekday set and time are alternative modes of one meeting; the room
+// is chosen with the physical-first rule and ASYNC is never used as a room.
 export function parseScheduleCell(cell: string): { meetings: ParsedMeeting[]; errors: ParseError[] } {
   const errors: ParseError[] = [];
   const parts = String(cell ?? "")
@@ -128,23 +165,26 @@ export function parseScheduleCell(cell: string): { meetings: ParsedMeeting[]; er
     }
 
     const start = parseClock(startRaw, startMer);
-    // The school form often omits the meridiem on the end time
-    // (e.g. "04:00 PM-05:00"); inherit it from the start time.
     const end = parseClock(endRaw, endMer ?? startMer);
     if (!start || !end) {
       errors.push({ raw: part, message: "Unreadable time. Use a 12-hour time such as 10:00 AM." });
       continue;
     }
-    let endTime = end;
-    if (!endMer && timeToMinutes(end) <= timeToMinutes(start)) {
-      const shifted = timeToMinutes(end) + 12 * 60;
-      if (shifted < 24 * 60) endTime = minutesToTime(shifted);
+    const resolved = resolveEndTime(start, end, Boolean(endMer));
+    if ("error" in resolved) {
+      errors.push({ raw: part, message: resolved.error });
+      continue;
     }
+    const endTime = resolved.end;
 
     let place = placeRaw.trim();
     let isLab = false;
-    const labMatch = /\(lab\)$/i.exec(place);
-    if (labMatch) {
+    // Accept any trailing parenthetical lab qualifier, e.g. "(Lab)" or
+    // "(CE LAB)", so the room code is the bare room and the lab flag is kept.
+    // Some cells stack qualifiers ("AGM102 (CE LAB) (Lab)"), so strip repeatedly.
+    for (;;) {
+      const labMatch = /\([^)]*\blab\b[^)]*\)\s*$/i.exec(place);
+      if (!labMatch) break;
       isLab = true;
       place = place.slice(0, labMatch.index).trim();
     }
@@ -163,13 +203,10 @@ export function parseScheduleCell(cell: string): { meetings: ParsedMeeting[]; er
     }
   }
 
-  const NON_ROOM = new Set(["ASYNC", "OLC", "TBA"]);
   const meetings: ParsedMeeting[] = [];
 
   for (const group of groups.values()) {
-    const physical = group.places.find(
-      (p) => !NON_ROOM.has(p.code.toUpperCase()) && p.code.toUpperCase().length > 0,
-    );
+    const physical = group.places.find((p) => !NON_ROOM.has(p.code.toUpperCase()));
     const olc = group.places.find((p) => p.code.toUpperCase() === "OLC");
     const tba = group.places.find((p) => p.code.toUpperCase() === "TBA");
     const isLab = physical?.isLab ?? group.places.some((p) => p.isLab);
@@ -191,10 +228,14 @@ export function parseScheduleCell(cell: string): { meetings: ParsedMeeting[]; er
       roomType = "TBA";
       mode = "FACE_TO_FACE";
     } else {
-      // Only ASYNC-like tokens remain: keep it as an online class, never print ASYNC.
-      roomCode = "OLC";
-      roomType = "ONLINE";
-      mode = "ONLINE";
+      // Only ASYNC-like tokens remain. ASYNC is never printed as a room and the
+      // schedule does not establish a valid room, so flag the meeting instead of
+      // silently turning it into an online OLC class.
+      errors.push({
+        raw: group.raw,
+        message: "No valid room: only ASYNC was listed (physical room, OLC, or TBA required).",
+      });
+      continue;
     }
 
     meetings.push({

@@ -1,6 +1,7 @@
 "use client";
 
 import { Fragment, useMemo, useState } from "react";
+import { ScrollArea } from "../../ScrollArea";
 
 export type EncodeCell = {
   key: string;
@@ -68,6 +69,7 @@ export function EncodeClient({
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [savedInfo, setSavedInfo] = useState(session);
   const [confirmedReplace, setConfirmedReplace] = useState(false);
+  const [query, setQuery] = useState("");
 
   const layout = useMemo(() => {
     return columns.map((_col, colIndex) => {
@@ -94,6 +96,17 @@ export function EncodeClient({
       return result;
     });
   }, [columns, rows]);
+
+  const trimmedQuery = query.trim().toLowerCase();
+  const matchedColumns = useMemo(() => {
+    const set = new Set<number>();
+    if (!trimmedQuery) return set;
+    columns.forEach((col, index) => {
+      if (col.label.toLowerCase().includes(trimmedQuery)) set.add(index);
+    });
+    return set;
+  }, [columns, trimmedQuery]);
+  const filtering = trimmedQuery.length > 0;
 
   const allCells = rows.flatMap((row) => row.cells.filter((c): c is NonNullable<typeof c> => !!c));
   const presentCount = allCells.filter((c) => values[c.key]?.present).length;
@@ -160,6 +173,30 @@ export function EncodeClient({
         ) : savedInfo ? null : (
           <span className="badge bg-zinc-100 text-zinc-600">Draft</span>
         )}
+        {columns.length > 1 ? (
+          <div className="relative ml-auto">
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 20 20"
+              className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400"
+              fill="currentColor"
+            >
+              <path
+                fillRule="evenodd"
+                d="M9 3.5a5.5 5.5 0 100 11 5.5 5.5 0 000-11zM2 9a7 7 0 1112.452 4.391l3.328 3.329a.75.75 0 11-1.06 1.06l-3.329-3.328A7 7 0 012 9z"
+                clipRule="evenodd"
+              />
+            </svg>
+            <input
+              type="search"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Find faculty..."
+              className="input w-48 pl-8"
+              aria-label="Find faculty column"
+            />
+          </div>
+        ) : null}
       </div>
 
       {unassigned.length > 0 ? (
@@ -170,22 +207,37 @@ export function EncodeClient({
         </p>
       ) : null}
 
-      <div className="overflow-auto rounded-md border border-zinc-200 bg-white">
+      {filtering ? (
+        <p className="text-xs text-muted">
+          {matchedColumns.size} of {columns.length} faculty match &ldquo;{query.trim()}&rdquo;.
+        </p>
+      ) : null}
+
+      <ScrollArea className="rounded-md border border-zinc-200 bg-white">
         <table className="w-full border-collapse text-xs">
           <thead>
             <tr>
-              <th rowSpan={2} className="border border-zinc-300 bg-zinc-100 px-2 py-1">
+              <th
+                rowSpan={2}
+                className="sticky left-0 top-0 z-30 min-w-[5.5rem] border border-zinc-300 bg-zinc-100 px-2 py-1 shadow-[1px_0_0_0_#d4d4d8]"
+              >
                 TIME
               </th>
-              {columns.map((col) => (
-                <th
-                  key={col.facultyId}
-                  colSpan={2}
-                  className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-center font-bold"
-                >
-                  {col.label}
-                </th>
-              ))}
+              {columns.map((col, colIndex) => {
+                const matched = matchedColumns.has(colIndex);
+                return (
+                  <th
+                    key={col.facultyId}
+                    colSpan={2}
+                    className={
+                      "min-w-[15rem] border border-zinc-300 px-2 py-1 text-center font-bold " +
+                      (filtering && !matched ? "bg-zinc-50 text-zinc-400" : "bg-zinc-100")
+                    }
+                  >
+                    {col.label}
+                  </th>
+                );
+              })}
             </tr>
             <tr>
               {columns.map((col) => (
@@ -199,10 +251,12 @@ export function EncodeClient({
             <tbody>
               {rows.map((row, rowIndex) => (
                 <tr key={row.hour}>
-                  <td className="whitespace-nowrap border border-zinc-200 px-2 py-1 text-center text-xs">
+                  <td className="sticky left-0 z-20 whitespace-nowrap border border-zinc-200 bg-white px-2 py-1 text-center text-xs shadow-[1px_0_0_0_#e4e4e7]">
                     {row.label}
                   </td>
                   {columns.map((col, colIndex) => {
+                    const dim = filtering && !matchedColumns.has(colIndex);
+                    const dimClass = dim ? "opacity-40" : "";
                     const spot = layout[colIndex][rowIndex];
                     const cell = row.cells[colIndex];
                     const entry = cell
@@ -213,17 +267,25 @@ export function EncodeClient({
                         <Fragment key={col.facultyId}>
                           <td
                             rowSpan={spot.span}
-                            className="border border-zinc-200 px-1 py-1 text-center align-middle text-[11px] font-medium"
+                            className={
+                              "min-w-[6rem] border border-zinc-200 px-1 py-1 text-center align-middle text-[11px] font-medium " +
+                              dimClass
+                            }
                           >
                             {spot.room}
                           </td>
-                          <td className="border border-zinc-200 px-1 py-1">{entry}</td>
+                          <td className={"min-w-[11rem] border border-zinc-200 px-1 py-1 " + dimClass}>
+                            {entry}
+                          </td>
                         </Fragment>
                       );
                     }
                     if (spot === "covered") {
                       return (
-                        <td key={`${col.facultyId}-e`} className="border border-zinc-200 px-1 py-1">
+                        <td
+                          key={`${col.facultyId}-e`}
+                          className={"min-w-[11rem] border border-zinc-200 px-1 py-1 " + dimClass}
+                        >
                           {entry}
                         </td>
                       );
@@ -239,10 +301,10 @@ export function EncodeClient({
               ))}
             </tbody>
           </table>
-        </div>
+        </ScrollArea>
 
       {unassigned.length > 0 ? (
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-muted">
           Only classes with an assigned faculty appear above.
         </p>
       ) : null}
@@ -282,13 +344,13 @@ function renderEntry(
           disabled={locked}
           onChange={(e) => update(cell.key, { present: e.target.checked })}
         />
-        <span className="text-[10px] text-zinc-500">{present ? "present" : "absent"}</span>
+        <span className="text-[10px] text-muted">{present ? "present" : "absent"}</span>
       </label>
       {!present ? (
         <input
           type="text"
           placeholder="reason (optional)"
-          className="input px-1 py-0.5 text-[11px]"
+          className="input w-auto px-1 py-0.5 text-[11px]"
           value={value?.reason ?? ""}
           disabled={locked}
           onChange={(e) => update(cell.key, { reason: e.target.value })}
@@ -298,7 +360,7 @@ function renderEntry(
         <input
           type="text"
           placeholder="actual room"
-          className="input px-1 py-0.5 text-[11px]"
+          className="input w-auto px-1 py-0.5 text-[11px]"
           value={value?.roomOverride ?? ""}
           disabled={locked}
           onChange={(e) => update(cell.key, { roomOverride: e.target.value })}

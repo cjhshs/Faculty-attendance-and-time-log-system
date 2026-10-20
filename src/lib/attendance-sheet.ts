@@ -121,6 +121,77 @@ export function buildProgramSheet(slots: SheetSlot[]): ProgramSheet {
   return { rows, columns, unassigned, totalFaculty: columns.length };
 }
 
+export type SheetReconciliation = {
+  ok: boolean;
+  expectedMeetings: number;
+  expectedHours: number;
+  renderedHours: number;
+  unassignedMeetings: number;
+  problems: string[];
+};
+
+// Compare the hours the schedule says should appear against the hours the grid
+// actually renders for each faculty column. A mismatch means two classes for the
+// same instructor overlap (one silently disappears from the sheet), so printing
+// must be blocked until the schedule is fixed. Unassigned (TBA) meetings cannot
+// be printed at all and are reported separately without failing the sheet.
+export function reconcileProgramSheet(
+  slots: SheetSlot[],
+  sheet?: ProgramSheet,
+): SheetReconciliation {
+  const grid = sheet ?? buildProgramSheet(slots);
+  const assigned = slots.filter((s) => s.facultyId != null && s.facultyName);
+  const expectedHours = assigned.reduce((n, s) => n + hoursOfRange(s.start, s.end).length, 0);
+
+  const renderedByFaculty = new Map<number, number>();
+  let renderedHours = 0;
+  for (const column of grid.columns) {
+    let count = 0;
+    for (const cell of column.cells) {
+      if (cell !== "empty" && cell !== "covered") count += cell.rowSpan;
+    }
+    renderedByFaculty.set(column.facultyId, count);
+    renderedHours += count;
+  }
+
+  const problems: string[] = [];
+  if (renderedHours !== expectedHours) {
+    const expectedByFaculty = new Map<number, number>();
+    for (const s of assigned) {
+      expectedByFaculty.set(
+        s.facultyId!,
+        (expectedByFaculty.get(s.facultyId!) ?? 0) + hoursOfRange(s.start, s.end).length,
+      );
+    }
+    for (const [facultyId, expected] of expectedByFaculty) {
+      const got = renderedByFaculty.get(facultyId) ?? 0;
+      if (got !== expected) {
+        const name = assigned.find((s) => s.facultyId === facultyId)?.facultyName ?? `#${facultyId}`;
+        problems.push(
+          `${name}: schedule has ${expected} hour(s) but the sheet shows ${got} — overlapping classes for the same instructor.`,
+        );
+      }
+    }
+    if (problems.length === 0) {
+      problems.push(
+        `Sheet hours (${renderedHours}) do not match the schedule (${expectedHours}).`,
+      );
+    }
+  }
+  if (grid.unassigned.length > 0) {
+    problems.push(`${grid.unassigned.length} unassigned (TBA) meeting(s) cannot be printed.`);
+  }
+
+  return {
+    ok: renderedHours === expectedHours,
+    expectedMeetings: assigned.length,
+    expectedHours,
+    renderedHours,
+    unassignedMeetings: grid.unassigned.length,
+    problems,
+  };
+}
+
 export function paginateColumns(
   columns: FacultyColumn[],
   perPage = FACULTY_PER_PAGE,

@@ -2,6 +2,7 @@ export const PERMISSIONS = {
   // Schedule
   SCHEDULE_IMPORT: "schedule.import",
   SCHEDULE_EDIT: "schedule.edit",
+  SCHEDULE_REPAIR: "schedule.repair",
   // Faculty, programs, rooms
   FACULTY_VIEW: "faculty.view",
   FACULTY_MANAGE: "faculty.manage",
@@ -30,6 +31,7 @@ export type PermissionKey = (typeof PERMISSIONS)[keyof typeof PERMISSIONS];
 export const ALL_PERMISSIONS: { name: PermissionKey; description: string }[] = [
   { name: PERMISSIONS.SCHEDULE_IMPORT, description: "Import schedule from Excel" },
   { name: PERMISSIONS.SCHEDULE_EDIT, description: "Edit schedule slots" },
+  { name: PERMISSIONS.SCHEDULE_REPAIR, description: "Analyze and repair schedule data before generation" },
   { name: PERMISSIONS.FACULTY_VIEW, description: "View faculty, programs and rooms" },
   { name: PERMISSIONS.FACULTY_MANAGE, description: "Add/edit faculty, programs and rooms" },
   { name: PERMISSIONS.ATTENDANCE_PRINT, description: "Print daily attendance sheets" },

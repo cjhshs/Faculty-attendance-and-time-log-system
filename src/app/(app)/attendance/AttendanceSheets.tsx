@@ -1,6 +1,8 @@
 import { Fragment } from "react";
 import { buildProgramSheet, paginateColumns, type SheetSlot } from "@/lib/attendance-sheet";
 import { formatLong, formatTime12 } from "@/lib/dates";
+import logo1 from "@/app/logo/logo1.png";
+import logo2 from "@/app/logo/logo2.png";
 
 export type SheetCourse = { id: number; code: string; name: string | null };
 export type SheetHeaderData = {
@@ -50,7 +52,7 @@ export function AttendanceSheets({
         <ProgramSheetView key={course.id} date={date} header={header} course={course} slots={slots} />
       ))}
       {slotsByCourse.length === 0 ? (
-        <p className="text-sm text-zinc-500">No scheduled classes for the selected date and programs.</p>
+        <p className="text-sm text-muted">No scheduled classes for the selected date and programs.</p>
       ) : null}
     </div>
   );
@@ -173,27 +175,21 @@ function SheetHead({
   header: SheetHeaderData;
   course: SheetCourse;
 }) {
+  const leftLogo = header.schoolLogo || logo1.src;
+  const rightLogo = header.collegeLogo || logo2.src;
   return (
     <div className="mb-2">
-      <div className="flex items-center justify-between gap-2">
-        {header.schoolLogo ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={header.schoolLogo} alt="School logo" className="h-12 w-12 object-contain" />
-        ) : (
-          <div className="h-12 w-12" />
-        )}
+      <div className="flex items-center justify-center gap-4">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={leftLogo} alt="School logo" className="h-14 w-14 shrink-0 object-contain" />
         <div className="text-center">
           <p className="text-sm font-bold">{header.schoolHeader}</p>
           <p className="text-sm font-semibold">{header.collegeHeader}</p>
           <p className="text-[11px]">{header.address}</p>
           <p className="mt-1 text-base font-bold tracking-widest">ATTENDANCE</p>
         </div>
-        {header.collegeLogo ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img src={header.collegeLogo} alt="College logo" className="h-12 w-12 object-contain" />
-        ) : (
-          <div className="h-12 w-12" />
-        )}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src={rightLogo} alt="College logo" className="h-14 w-14 shrink-0 object-contain" />
       </div>
       <div className="mt-1 flex flex-wrap items-center justify-between text-[11px]">
         <span>

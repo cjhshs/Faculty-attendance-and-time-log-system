@@ -33,8 +33,10 @@ export function ActionForm({
       {state ? (
         <p
           className={
-            "mt-2 rounded-md px-2 py-1 text-xs " +
-            (state.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700")
+            "mt-2 rounded-lg border px-2.5 py-1.5 text-xs " +
+            (state.ok
+              ? "border-green-200 bg-green-50 text-green-700"
+              : "border-red-200 bg-red-50 text-red-700")
           }
         >
           {state.message}
@@ -53,35 +55,48 @@ export function ActionButton({
   fields,
   variant = "default",
   confirm,
+  title,
 }: {
   action: Action;
   label: string;
   fields: Record<string, string | number>;
   variant?: "default" | "danger";
   confirm?: string;
+  title?: string;
 }) {
-  const [, formAction, pending] = useActionState(
+  const [state, formAction, pending] = useActionState(
     async (_prev: ActionResult | null, formData: FormData) => action(formData),
     null,
   );
   return (
-    <form
-      action={formAction}
-      onSubmit={(e) => {
-        if (confirm && !window.confirm(confirm)) e.preventDefault();
-      }}
-      className="inline"
-    >
+    <form action={formAction} className="inline">
       {Object.entries(fields).map(([k, v]) => (
         <input key={k} type="hidden" name={k} value={v} />
       ))}
       <button
         type="submit"
         disabled={pending}
-        className={"btn px-2 py-1 text-xs " + (variant === "danger" ? "btn-danger" : "")}
+        title={title}
+        onClick={(e) => {
+          if (confirm && !window.confirm(confirm)) e.preventDefault();
+        }}
+        className={"btn btn-sm " + (variant === "danger" ? "btn-danger" : "")}
       >
         {pending ? "…" : label}
       </button>
+      {state ? (
+        <span
+          role="status"
+          className={
+            "ml-2 rounded-lg border px-2.5 py-1.5 text-xs " +
+            (state.ok
+              ? "border-green-200 bg-green-50 text-green-700"
+              : "border-red-200 bg-red-50 text-red-700")
+          }
+        >
+          {state.message}
+        </span>
+      ) : null}
     </form>
   );
 }

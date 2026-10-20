@@ -6,12 +6,20 @@ import { getSettings } from "@/lib/settings";
 import { buildSummary } from "@/lib/summary";
 import { prisma } from "@/lib/prisma";
 import { cutoffRange, parseISODate, formatLong } from "@/lib/dates";
+import { getActiveTerm, parseTerm } from "@/lib/terms";
 import { PrintButton } from "../../attendance/PrintButton";
 
 export default async function SummaryPrintPage({
   searchParams,
 }: {
-  searchParams: Promise<{ start?: string; end?: string; program?: string; faculty?: string }>;
+  searchParams: Promise<{
+    start?: string;
+    end?: string;
+    program?: string;
+    faculty?: string;
+    schoolYear?: string;
+    semester?: string;
+  }>;
 }) {
   const user = await requirePermission(PERMISSIONS.SUMMARY_PRINT);
   void user;
@@ -23,7 +31,13 @@ export default async function SummaryPrintPage({
   const course = params.program ? await prisma.course.findUnique({ where: { code: params.program } }) : null;
   const facultyFilter = params.faculty ? Number(params.faculty) : null;
 
-  const summary = await buildSummary(start, end, course?.id);
+  const activeTerm = await getActiveTerm();
+  const selectedTerm =
+    params.schoolYear && params.semester
+      ? parseTerm(params.schoolYear, params.semester)
+      : activeTerm;
+
+  const summary = await buildSummary(start, end, course?.id, selectedTerm);
   const settings = await getSettings();
   const rows = facultyFilter
     ? summary.faculty.filter((f) => f.facultyId === facultyFilter)
@@ -47,7 +61,9 @@ export default async function SummaryPrintPage({
           <p className="text-base font-bold tracking-widest">ATTENDANCE SUMMARY</p>
           <p className="text-xs">
             Range: {formatLong(start)} to {formatLong(end)}
-            {course ? ` — Program: ${course.code}` : ""} | Generated: {generated}
+            {course ? ` — Program: ${course.code}` : ""}
+            {selectedTerm ? ` — ${selectedTerm.schoolYear} ${selectedTerm.semester}` : ""} |
+            Generated: {generated}
           </p>
         </div>
 

@@ -4,40 +4,64 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { getCourses } from "@/lib/data";
 import { buildSummary } from "@/lib/summary";
 import { cutoffRange, parseISODate, todayUtc, formatLong } from "@/lib/dates";
+import { getActiveTerm, listTerms, parseTerm } from "@/lib/terms";
+import { ScrollArea } from "../ScrollArea";
 
 export default async function SummaryPage({
   searchParams,
 }: {
-  searchParams: Promise<{ start?: string; end?: string; program?: string }>;
+  searchParams: Promise<{
+    start?: string;
+    end?: string;
+    program?: string;
+    q?: string;
+    year?: string;
+    sem?: string;
+  }>;
 }) {
   const user = await requirePermission(PERMISSIONS.SUMMARY_VIEW);
   const params = await searchParams;
   const def = cutoffRange();
+  const [activeTerm, terms] = await Promise.all([getActiveTerm(), listTerms()]);
+  const years = Array.from(new Set(terms.map((t) => t.schoolYear)));
+  const selectedYear = params.year ?? activeTerm.schoolYear;
+  const selectedSem = params.sem ?? activeTerm.semester;
+  const selectedTerm =
+    selectedYear === "all" || selectedSem === "all"
+      ? null
+      : parseTerm(selectedYear, selectedSem);
 
   const start = parseISODate(params.start ?? null) ?? def.start;
   const end = parseISODate(params.end ?? null) ?? def.end;
   if (start > end) {
     return (
-      <div className="card text-sm text-red-700">
+      <div className="alert alert-error">
         The start date must not be later than the end date.
       </div>
     );
   }
 
+  const q = (params.q ?? "").trim().toLowerCase();
   const courses = await getCourses();
   const course = params.program ? courses.find((c) => c.code === params.program) : undefined;
-  const summary = await buildSummary(start, end, course?.id);
+  const summary = await buildSummary(start, end, course?.id, selectedTerm);
+  const shownFaculty = q
+    ? summary.faculty.filter((f) => f.name.toLowerCase().includes(q))
+    : summary.faculty;
 
   const qs = new URLSearchParams({
     start: start.toISOString().slice(0, 10),
     end: end.toISOString().slice(0, 10),
     ...(course ? { program: course.code } : {}),
+    ...(selectedTerm
+      ? { schoolYear: selectedTerm.schoolYear, semester: selectedTerm.semester }
+      : {}),
   });
 
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">Attendance Summary</h1>
+        <h1 className="page-title">Attendance Summary</h1>
         <div className="flex gap-2">
           {hasPermission(user, PERMISSIONS.SUMMARY_PRINT) && (
             <Link href={`/summary/print?${qs.toString()}`} className="btn">
@@ -66,6 +90,30 @@ export default async function SummaryPage({
           <input id="end" type="date" name="end" defaultValue={end.toISOString().slice(0, 10)} className="input" />
         </div>
         <div>
+          <label className="label" htmlFor="year">
+            Academic year
+          </label>
+          <select id="year" name="year" defaultValue={selectedYear} className="input">
+            {years.map((y) => (
+              <option key={y} value={y}>
+                {y}
+              </option>
+            ))}
+            <option value="all">All years</option>
+          </select>
+        </div>
+        <div>
+          <label className="label" htmlFor="sem">
+            Semester
+          </label>
+          <select id="sem" name="sem" defaultValue={selectedSem} className="input">
+            <option value="1st Semester">1st Semester</option>
+            <option value="2nd Semester">2nd Semester</option>
+            <option value="Summer">Summer</option>
+            <option value="all">All semesters</option>
+          </select>
+        </div>
+        <div>
           <label className="label" htmlFor="program">
             Program
           </label>
@@ -78,19 +126,34 @@ export default async function SummaryPage({
             ))}
           </select>
         </div>
+        <div className="min-w-56 flex-1">
+          <label className="label" htmlFor="q">
+            Find faculty
+          </label>
+          <input
+            id="q"
+            type="search"
+            name="q"
+            defaultValue={params.q ?? ""}
+            placeholder="Search faculty name..."
+            className="input"
+          />
+        </div>
         <button className="btn btn-primary" type="submit">
           View
         </button>
       </form>
 
-      <p className="text-sm text-zinc-500">
+      <p className="text-sm text-muted">
         Range: <strong>{formatLong(start)}</strong> to <strong>{formatLong(end)}</strong>
-        {course ? ` — program ${course.code}` : " — all programs"}. Generated{" "}
-        {todayUtc().toISOString().slice(0, 10)}.
+        {course ? ` — program ${course.code}` : " — all programs"}.{" "}
+        {selectedTerm
+          ? `Term: ${selectedTerm.schoolYear} · ${selectedTerm.semester}.`
+          : "All semesters."}{" "}
+        Generated {todayUtc().toISOString().slice(0, 10)}.
       </p>
-
       {summary.incomplete.length > 0 ? (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+        <div className="alert alert-warn block">
           <p className="font-semibold">
             Incomplete attendance: {summary.incomplete.length} date/program scope(s) are not encoded.
           </p>
@@ -103,7 +166,7 @@ export default async function SummaryPage({
           </p>
         </div>
       ) : (
-        <div className="rounded-md border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-800">
+        <div className="alert alert-success">
           All scheduled date/program scopes in this range are encoded.
         </div>
       )}
@@ -115,21 +178,21 @@ export default async function SummaryPage({
         <Stat label="Absent hours" value={summary.totals.absentHours} tone="red" />
       </div>
 
-      <div className="card overflow-auto">
+      <ScrollArea className="card">
         <table className="data-table">
           <thead>
             <tr>
-              <th>Faculty</th>
-              <th>Scheduled hrs</th>
-              <th>Present hrs</th>
-              <th>Absent hrs</th>
-              <th>Present days</th>
-              <th>Absent days</th>
-              <th>Partial days</th>
+              <th scope="col">Faculty</th>
+              <th scope="col">Scheduled hrs</th>
+              <th scope="col">Present hrs</th>
+              <th scope="col">Absent hrs</th>
+              <th scope="col">Present days</th>
+              <th scope="col">Absent days</th>
+              <th scope="col">Partial days</th>
             </tr>
           </thead>
           <tbody>
-            {summary.faculty.map((f) => (
+            {shownFaculty.map((f) => (
               <tr key={f.facultyId}>
                 <td className="whitespace-nowrap font-medium">{f.name}</td>
                 <td className="text-center">{f.encodedScheduledHours}</td>
@@ -140,20 +203,20 @@ export default async function SummaryPage({
                 <td className="text-center">{f.partialDays}</td>
               </tr>
             ))}
-            {summary.faculty.length === 0 ? (
+            {shownFaculty.length === 0 ? (
               <tr>
-                <td colSpan={7} className="text-center text-zinc-400">
-                  No scheduled faculty in this range.
+                <td colSpan={7} className="text-center text-muted">
+                  {q ? "No faculty match your search." : "No scheduled faculty in this range."}
                 </td>
               </tr>
             ) : null}
           </tbody>
         </table>
-      </div>
+      </ScrollArea>
 
       {summary.faculty.some((f) => f.reasons.length > 0) ? (
         <div className="card">
-          <h2 className="mb-2 text-base font-semibold">Absence reasons</h2>
+          <h2 className="mb-2 section-title">Absence reasons</h2>
           <ul className="space-y-1 text-sm">
             {summary.faculty.flatMap((f) =>
               f.reasons.map((r, i) => (
@@ -179,10 +242,10 @@ function Stat({
   tone?: "green" | "red";
 }) {
   const toneClass =
-    tone === "green" ? "text-green-700" : tone === "red" ? "text-red-700" : "text-zinc-900";
+    tone === "green" ? "text-green-700" : tone === "red" ? "text-red-700" : "text-navy";
   return (
     <div className="card">
-      <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
+      <p className="text-xs uppercase tracking-wide text-muted">{label}</p>
       <p className={"mt-1 text-2xl font-bold " + toneClass}>{value}</p>
     </div>
   );

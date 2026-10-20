@@ -1,6 +1,10 @@
 import * as XLSX from "xlsx";
 import { prisma } from "@/lib/prisma";
 import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/lib/schedule-parser";
+import { normalizeSemester } from "@/lib/terms";
+import { timeToMinutes, WEEKDAY_NAMES } from "@/lib/dates";
+
+export type ImportTargetTerm = { schoolYear: string; semester: string };
 
 export const REQUIRED_COLUMNS = [
   "Term Type",
@@ -32,6 +36,7 @@ export type PlannedSlot = {
   facultyName: string | null;
   termType: string | null;
   semester: string | null;
+  schoolYear: string | null;
   weekday: number;
   start: string;
   end: string;
@@ -42,25 +47,62 @@ export type PlannedSlot = {
   messages: string[];
 };
 
+export type ImportConflict = {
+  facultyName: string;
+  weekday: number;
+  sameClassNumber: boolean;
+  a: { rowNumber: number; cn: string; subject: string; courseCode: string; start: string; end: string; roomCode: string };
+  b: { rowNumber: number; cn: string; subject: string; courseCode: string; start: string; end: string; roomCode: string };
+  message: string;
+};
+
+export type ImportReconciliation = {
+  worksheetRows: number;
+  dataRows: number;
+  parsedRows: number;
+  errorRows: number;
+  warningRows: number;
+  meetingEntries: number;
+  validBlocks: number;
+};
+
+export type ImportSummary = ImportReconciliation & {
+  rowsRead: number;
+  plannedSlots: number;
+  importable: number;
+  newFaculty: number;
+  newSlots: number;
+  updatedSlots: number;
+  unchangedSlots: number;
+  duplicateSlots: number;
+  errors: number;
+  warnings: number;
+  conflicts: number;
+};
+
 export type ImportPlan = {
-  summary: {
-    rowsRead: number;
-    plannedSlots: number;
-    importable: number;
-    newFaculty: number;
-    newSlots: number;
-    updatedSlots: number;
-    unchangedSlots: number;
-    errors: number;
-    warnings: number;
-  };
+  summary: ImportSummary;
+  targetTerm: ImportTargetTerm | null;
   slots: PlannedSlot[];
   errors: { row: number; message: string }[];
   warnings: { row: number; message: string }[];
+  conflicts: ImportConflict[];
   newFacultyNames: string[];
   unassigned: { row: number; cn: string; subject: string }[];
   duplicateFacultyNames: { name: string; similarTo: string; row: number }[];
   missingColumns: string[];
+};
+
+export type ExistingSlot = {
+  id: number;
+  cn: string;
+  weekday: number;
+  startTime: string;
+  endTime: string;
+  roomId: number;
+  subject: string;
+  description: string | null;
+  facultyId: number | null;
 };
 
 function cell(value: unknown): string {
@@ -73,11 +115,15 @@ function num(value: unknown): number {
   return Number.isFinite(n) ? n : 0;
 }
 
-function readRows(buffer: Buffer): { rows: Record<string, unknown>[]; missingColumns: string[] } {
+export function readRows(buffer: Buffer): {
+  rows: Record<string, unknown>[];
+  missingColumns: string[];
+  worksheetRows: number;
+} {
   const workbook = XLSX.read(buffer, { type: "buffer" });
   const sheetName = workbook.SheetNames.includes("Sheet1") ? "Sheet1" : workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  if (!sheet) return { rows: [], missingColumns: REQUIRED_COLUMNS };
+  if (!sheet) return { rows: [], missingColumns: REQUIRED_COLUMNS, worksheetRows: 0 };
   const raw = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { defval: "" });
   const rows = raw.map((row) => {
     const out: Record<string, unknown> = {};
@@ -87,11 +133,9 @@ function readRows(buffer: Buffer): { rows: Record<string, unknown>[]; missingCol
   const headers = new Set<string>();
   for (const row of rows) Object.keys(row).forEach((k) => headers.add(k));
   const missingColumns = REQUIRED_COLUMNS.filter((c) => !headers.has(c));
-  return { rows, missingColumns };
-}
-
-function slotKey(cn: string, weekday: number, start: string, end: string, roomCode: string) {
-  return `${cn}|${weekday}|${start}|${end}|${roomCode}`;
+  const range = sheet["!ref"] ? XLSX.utils.decode_range(sheet["!ref"]) : null;
+  const worksheetRows = range ? range.e.r - range.s.r + 1 : raw.length + 1;
+  return { rows, missingColumns, worksheetRows };
 }
 
 // Similarity on character bigrams, used to surface likely duplicate faculty names.
@@ -112,22 +156,67 @@ function similarity(a: string, b: string): number {
   return (2 * inter) / (a2.size + b2.size);
 }
 
-export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
-  const { rows, missingColumns } = readRows(buffer);
+// Detect instructors booked in two places at the same time on the same weekday.
+// Nothing is resolved silently: every overlapping pair is reported so the dean
+// can decide which class the schedule should keep.
+export function detectFacultyConflicts(slots: PlannedSlot[]): ImportConflict[] {
+  const byFacultyDay = new Map<string, PlannedSlot[]>();
+  for (const slot of slots) {
+    if (!slot.facultyName) continue;
+    const key = `${nameKey(slot.facultyName)}|${slot.weekday}`;
+    const list = byFacultyDay.get(key) ?? [];
+    list.push(slot);
+    byFacultyDay.set(key, list);
+  }
 
-  const [courses, rooms, faculty, existingSlots] = await Promise.all([
-    prisma.course.findMany(),
-    prisma.room.findMany(),
-    prisma.faculty.findMany(),
-    prisma.scheduleSlot.findMany(),
-  ]);
+  const conflicts: ImportConflict[] = [];
+  for (const [key, group] of byFacultyDay) {
+    const weekday = Number(key.split("|")[1]);
+    const ordered = [...group].sort(
+      (a, b) => timeToMinutes(a.start) - timeToMinutes(b.start) || timeToMinutes(a.end) - timeToMinutes(b.end),
+    );
+    for (let i = 0; i < ordered.length; i++) {
+      for (let j = i + 1; j < ordered.length; j++) {
+        const a = ordered[i];
+        const b = ordered[j];
+        if (timeToMinutes(b.start) >= timeToMinutes(a.end)) break;
+        const day = WEEKDAY_NAMES[weekday] ?? "";
+        conflicts.push({
+          facultyName: a.facultyName ?? "",
+          weekday,
+          sameClassNumber: a.cn === b.cn,
+          a: { rowNumber: a.rowNumber, cn: a.cn, subject: a.subject, courseCode: a.courseCode, start: a.start, end: a.end, roomCode: a.roomCode },
+          b: { rowNumber: b.rowNumber, cn: b.cn, subject: b.subject, courseCode: b.courseCode, start: b.start, end: b.end, roomCode: b.roomCode },
+          message: `${a.facultyName}: ${day} ${a.start}-${a.end} (CN ${a.cn} ${a.subject}) overlaps ${b.start}-${b.end} (CN ${b.cn} ${b.subject}).`,
+        });
+      }
+    }
+  }
+  return conflicts;
+}
 
-  const courseByCode = new Map(courses.map((c) => [c.code.toUpperCase(), c]));
-  const roomByCode = new Map(rooms.map((r) => [r.code.toUpperCase(), r]));
-  const facultyByKey = new Map(faculty.map((f) => [nameKey(f.fullName), f]));
+export type PlanContext = {
+  faculty: { id: number; fullName: string }[];
+  courses: { id: number; code: string }[];
+  rooms: { id: number; code: string }[];
+  existingSlots: ExistingSlot[];
+  target?: ImportTargetTerm | null;
+  worksheetRows?: number;
+  missingColumns?: string[];
+};
+
+// Pure parse + planning core: turns worksheet rows into validated, term-stamped
+// slots and reconciliation totals. It performs no database access so it can be
+// unit-tested against the real workbook deterministically.
+export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext): ImportPlan {
+  const target = ctx.target ?? null;
+  const missingColumns = ctx.missingColumns ?? [];
+  const worksheetRows = ctx.worksheetRows ?? rows.length + 1;
+  const roomById = new Map(ctx.rooms.map((r) => [r.id, r]));
+  const facultyByKey = new Map(ctx.faculty.map((f) => [nameKey(f.fullName), f]));
   const existingByKey = new Map(
-    existingSlots.map((s) => {
-      const roomCode = rooms.find((r) => r.id === s.roomId)?.code ?? "";
+    ctx.existingSlots.map((s) => {
+      const roomCode = roomById.get(s.roomId)?.code ?? "";
       return [`${s.cn}|${s.weekday}|${s.startTime}|${s.endTime}|${roomCode}`, s];
     }),
   );
@@ -139,15 +228,19 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
   const duplicateFacultyNames: { name: string; similarTo: string; row: number }[] = [];
   const newFacultyNames = new Set<string>();
   const seenSlotKeys = new Set<string>();
-  const newRooms = new Set<string>();
-  const newCourses = new Set<string>();
+  const errorRowSet = new Set<number>();
+  const warningRowSet = new Set<number>();
+  let meetingEntries = 0;
+  let validBlocks = 0;
 
   if (missingColumns.length > 0) {
     return {
-      summary: emptySummary(rows.length),
+      summary: emptySummary(rows.length, worksheetRows),
+      targetTerm: target,
       slots: [],
       errors: [{ row: 0, message: `Missing required columns: ${missingColumns.join(", ")}` }],
       warnings: [],
+      conflicts: [],
       newFacultyNames: [],
       unassigned: [],
       duplicateFacultyNames: [],
@@ -163,25 +256,34 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
     const schedule = cell(row["Schedule"]);
     const instructorRaw = normaliseFacultyName(cell(row["Instructor"]));
 
+    const fail = (message: string) => {
+      errors.push({ row: rowNumber, message });
+      errorRowSet.add(rowNumber);
+    };
+
     if (!cn) {
-      errors.push({ row: rowNumber, message: "Missing CN (class number)." });
+      fail("Missing CN (class number).");
       return;
     }
     if (!courseCode) {
-      errors.push({ row: rowNumber, message: `CN ${cn}: missing program/course.` });
+      fail(`CN ${cn}: missing program/course.`);
       return;
     }
     if (!schedule) {
-      errors.push({ row: rowNumber, message: `CN ${cn}: missing schedule.` });
+      fail(`CN ${cn}: missing schedule.`);
       return;
     }
 
-    if (!courseByCode.has(courseCode.toUpperCase())) newCourses.add(courseCode.toUpperCase());
+    meetingEntries += schedule
+      .split("||")
+      .map((p) => p.trim())
+      .filter(Boolean).length;
 
     const { meetings, errors: parseErrors } = parseScheduleCell(schedule);
     for (const pe of parseErrors) {
-      errors.push({ row: rowNumber, message: `CN ${cn}: ${pe.message} (${pe.raw})` });
+      fail(`CN ${cn}: ${pe.message} (${pe.raw})`);
     }
+    validBlocks += meetings.length;
     if (meetings.length === 0) return;
 
     // Faculty assignment
@@ -191,25 +293,21 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
       const key = nameKey(instructorRaw);
       if (!facultyByKey.has(key)) {
         newFacultyNames.add(instructorRaw);
-        // Compare against existing faculty for likely duplicates
-        for (const f of faculty) {
+        for (const f of ctx.faculty) {
           const score = similarity(instructorRaw, f.fullName);
           if (score >= 0.86 && score < 1) {
-            duplicateFacultyNames.push({
-              name: instructorRaw,
-              similarTo: f.fullName,
-              row: rowNumber,
-            });
+            duplicateFacultyNames.push({ name: instructorRaw, similarTo: f.fullName, row: rowNumber });
             break;
           }
         }
       }
     } else {
       unassigned.push({ row: rowNumber, cn, subject });
+      warnings.push({ row: rowNumber, message: `CN ${cn}: unassigned instructor (TBA).` });
+      warningRowSet.add(rowNumber);
     }
 
     for (const meeting of meetings) {
-      if (!roomByCode.has(meeting.roomCode.toUpperCase())) newRooms.add(meeting.roomCode.toUpperCase());
       for (const weekday of meeting.weekdays) {
         const key = `${cn}|${weekday}|${meeting.start}|${meeting.end}|${meeting.roomCode}`;
         const messages: string[] = [];
@@ -218,6 +316,7 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
             row: rowNumber,
             message: `Duplicate slot in file (CN ${cn}, same day/time/room) — ignored.`,
           });
+          warningRowSet.add(rowNumber);
           continue;
         }
         seenSlotKeys.add(key);
@@ -225,11 +324,10 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
         const existing = existingByKey.get(key);
         let status: PlannedSlotStatus = "new";
         if (existing) {
-          const sameFaculty = (existing.facultyId ? facultyByKey.get(nameKey(instructorRaw))?.id : null) === existing.facultyId;
+          const sameFaculty =
+            (existing.facultyId ? facultyByKey.get(nameKey(instructorRaw))?.id : null) === existing.facultyId;
           const unchanged =
-            existing.subject === subject &&
-            (existing.description ?? "") === cell(row["Description"]) &&
-            sameFaculty;
+            existing.subject === subject && (existing.description ?? "") === cell(row["Description"]) && sameFaculty;
           status = unchanged ? "unchanged" : "update";
         }
 
@@ -245,7 +343,8 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
           instructorRaw,
           facultyName,
           termType: cell(row["Term Type"]) || null,
-          semester: cell(row["Sem"]) || null,
+          semester: target?.semester ?? normalizeSemester(cell(row["Sem"])) ?? null,
+          schoolYear: target?.schoolYear ?? null,
           weekday,
           start: meeting.start,
           end: meeting.end,
@@ -259,26 +358,38 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
     }
   });
 
-  const newFacultyCount = newFacultyNames.size;
+  const conflicts = detectFacultyConflicts(slots);
+
   const newSlots = slots.filter((s) => s.status === "new").length;
   const updatedSlots = slots.filter((s) => s.status === "update").length;
   const unchangedSlots = slots.filter((s) => s.status === "unchanged").length;
 
   return {
     summary: {
+      worksheetRows,
+      dataRows: rows.length,
+      parsedRows: rows.length - errorRowSet.size,
+      errorRows: errorRowSet.size,
+      warningRows: warningRowSet.size,
+      meetingEntries,
+      validBlocks,
       rowsRead: rows.length,
       plannedSlots: slots.length,
       importable: newSlots + updatedSlots,
-      newFaculty: newFacultyCount,
+      newFaculty: newFacultyNames.size,
       newSlots,
       updatedSlots,
       unchangedSlots,
+      duplicateSlots: updatedSlots + unchangedSlots,
       errors: errors.length,
       warnings: warnings.length,
+      conflicts: conflicts.length,
     },
+    targetTerm: target,
     slots,
     errors,
     warnings,
+    conflicts,
     newFacultyNames: Array.from(newFacultyNames),
     unassigned,
     duplicateFacultyNames,
@@ -286,8 +397,15 @@ export async function buildPlan(buffer: Buffer): Promise<ImportPlan> {
   };
 }
 
-function emptySummary(rowsRead: number): ImportPlan["summary"] {
+function emptySummary(rowsRead: number, worksheetRows: number): ImportSummary {
   return {
+    worksheetRows,
+    dataRows: rowsRead,
+    parsedRows: 0,
+    errorRows: 0,
+    warningRows: 0,
+    meetingEntries: 0,
+    validBlocks: 0,
     rowsRead,
     plannedSlots: 0,
     importable: 0,
@@ -295,9 +413,43 @@ function emptySummary(rowsRead: number): ImportPlan["summary"] {
     newSlots: 0,
     updatedSlots: 0,
     unchangedSlots: 0,
+    duplicateSlots: 0,
     errors: 0,
     warnings: 0,
+    conflicts: 0,
   };
+}
+
+export async function buildPlan(
+  buffer: Buffer,
+  target?: ImportTargetTerm | null,
+): Promise<ImportPlan> {
+  const { rows, missingColumns, worksheetRows } = readRows(buffer);
+
+  const [courses, rooms, faculty, allExistingSlots] = await Promise.all([
+    prisma.course.findMany(),
+    prisma.room.findMany(),
+    prisma.faculty.findMany(),
+    prisma.scheduleSlot.findMany(),
+  ]);
+
+  // When importing into a specific term, only compare against that term's
+  // schedules so a new semester never collides with previous semesters.
+  const existingSlots = target
+    ? allExistingSlots.filter(
+        (s) => s.schoolYear === target.schoolYear && s.semester === target.semester,
+      )
+    : allExistingSlots;
+
+  return planFromRows(rows, {
+    courses: courses.map((c) => ({ id: c.id, code: c.code })),
+    rooms: rooms.map((r) => ({ id: r.id, code: r.code })),
+    faculty: faculty.map((f) => ({ id: f.id, fullName: f.fullName })),
+    existingSlots,
+    target,
+    worksheetRows,
+    missingColumns,
+  });
 }
 
 export type CommitResult = {
@@ -308,10 +460,31 @@ export type CommitResult = {
   programsCreated: number;
   roomsCreated: number;
   errors: number;
+  batchId: number | null;
 };
 
-export async function commitPlan(buffer: Buffer): Promise<{ plan: ImportPlan; result: CommitResult }> {
-  const plan = await buildPlan(buffer);
+export type ImportBatchMeta = { filename?: string; importedById?: number };
+
+export async function commitPlan(
+  buffer: Buffer,
+  target?: ImportTargetTerm | null,
+  meta?: ImportBatchMeta,
+): Promise<{ plan: ImportPlan; result: CommitResult }> {
+  const plan = await buildPlan(buffer, target);
+  if (plan.missingColumns.length > 0) {
+    throw new Error(`Missing required columns: ${plan.missingColumns.join(", ")}`);
+  }
+  const result = await writePlan(plan, target, meta);
+  return { plan, result };
+}
+
+// Persist an already-computed plan. Shared by the file importer and the schedule
+// repair engine so both paths write slots through exactly one code path.
+export async function writePlan(
+  plan: ImportPlan,
+  target?: ImportTargetTerm | null,
+  meta?: ImportBatchMeta,
+): Promise<CommitResult> {
   if (plan.missingColumns.length > 0) {
     throw new Error(`Missing required columns: ${plan.missingColumns.join(", ")}`);
   }
@@ -324,9 +497,30 @@ export async function commitPlan(buffer: Buffer): Promise<{ plan: ImportPlan; re
     programsCreated: 0,
     roomsCreated: 0,
     errors: plan.errors.length,
+    batchId: null,
   };
 
+  // Only bother tracking a batch when a target term is known and the file will
+  // actually create or update at least one slot. Unchanged/error rows keep
+  // whatever batch they already belonged to.
+  const willWrite = plan.slots.some((s) => s.status === "new" || s.status === "update");
+
   await prisma.$transaction(async (tx) => {
+    // Import batch — lets a single upload be identified and cleared later,
+    // without touching manually created or previously imported schedules.
+    let batchId: number | null = null;
+    if (target && willWrite) {
+      const batch = await tx.importBatch.create({
+        data: {
+          filename: meta?.filename?.trim() || "schedule.xlsx",
+          schoolYear: target.schoolYear,
+          semester: target.semester,
+          importedById: meta?.importedById ?? null,
+        },
+      });
+      batchId = batch.id;
+    }
+
     // Programs
     const courseCodes = Array.from(new Set(plan.slots.map((s) => s.courseCode)));
     const courseMap = new Map<string, number>();
@@ -387,9 +581,9 @@ export async function commitPlan(buffer: Buffer): Promise<{ plan: ImportPlan; re
           startTime: slot.start,
           endTime: slot.end,
           roomId,
+          ...(target ? { schoolYear: target.schoolYear, semester: target.semester } : {}),
         },
       });
-
       const data = {
         cn: slot.cn,
         subject: slot.subject,
@@ -399,13 +593,15 @@ export async function commitPlan(buffer: Buffer): Promise<{ plan: ImportPlan; re
         yearLevel: slot.yearLevel,
         courseId,
         facultyId,
+        termType: slot.termType,
+        semester: target?.semester ?? slot.semester,
+        schoolYear: target?.schoolYear ?? slot.schoolYear,
         weekday: slot.weekday,
         startTime: slot.start,
         endTime: slot.end,
         roomId,
         mode: slot.mode,
-        termType: slot.termType,
-        semester: slot.semester,
+        importBatchId: batchId,
       };
 
       if (existing) {
@@ -420,7 +616,15 @@ export async function commitPlan(buffer: Buffer): Promise<{ plan: ImportPlan; re
         result.created++;
       }
     }
+
+    if (batchId) {
+      await tx.importBatch.update({
+        where: { id: batchId },
+        data: { slotCount: result.created + result.updated },
+      });
+      result.batchId = batchId;
+    }
   });
 
-  return { plan, result };
+  return result;
 }

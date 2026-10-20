@@ -27,6 +27,9 @@ model User {
   encodedAttendances Attendance[] @relation("EncodedBy")
   savedSessions      AttendanceSession[] @relation("SavedBy")
   auditLogs          AuditLog[]
+  importBatches      ImportBatch[] @relation("ImportedBy")
+  repairSources      RepairSource[] @relation("RepairBy")
+  repairDecisions    RepairFinding[] @relation("RepairDecidedBy")
 
   @@map("users")
 }
@@ -153,19 +156,100 @@ model ScheduleSlot {
   roomId      Int          @map("room_id")
   mode        Mode         @default(FACE_TO_FACE)
   termType    String?      @map("term_type")
-  semester    String?
+  schoolYear  String?      @map("school_year") // e.g. "2026-2027"
+  semester    String?      // e.g. "1st Semester"
   slotsInfo   String?      @map("slots") // enrollment "47/45" (informational)
+  importBatchId Int?       @map("import_batch_id")
   createdAt   DateTime     @default(now()) @map("created_at")
   updatedAt   DateTime     @updatedAt @map("updated_at")
   course      Course       @relation(fields: [courseId], references: [id])
   faculty     Faculty?     @relation(fields: [facultyId], references: [id])
   room        Room         @relation(fields: [roomId], references: [id])
   attendance  Attendance[]
+  importBatch ImportBatch? @relation(fields: [importBatchId], references: [id], onDelete: SetNull)
 
   @@index([facultyId])
   @@index([courseId])
   @@index([weekday, startTime, endTime])
+  @@index([schoolYear, semester])
+  @@index([importBatchId])
   @@map("schedule_slots")
+}
+
+// One row per import commit, so an inaccurate upload can be identified and
+// cleared separately from manual or later imports.
+model ImportBatch {
+  id           Int            @id @default(autoincrement())
+  filename     String
+  schoolYear   String         @map("school_year")
+  semester     String
+  slotCount    Int            @default(0) @map("slot_count")
+  importedById Int?           @map("imported_by_id")
+  createdAt    DateTime       @default(now()) @map("created_at")
+  importedBy   User?          @relation("ImportedBy", fields: [importedById], references: [id], onDelete: SetNull)
+  slots        ScheduleSlot[]
+
+  @@index([schoolYear, semester])
+  @@index([createdAt])
+  @@map("import_batches")
+}
+
+// ---------------------------------------------------------------------------
+// Schedule repair
+// ---------------------------------------------------------------------------
+
+// One immutable snapshot of a repair analysis over an uploaded workbook. The
+// checksum makes the same file idempotent: re-uploading an identical workbook
+// reuses the source and its findings instead of creating duplicates.
+model RepairSource {
+  id          Int             @id @default(autoincrement())
+  filename    String
+  checksum    String          @unique
+  schoolYear  String?         @map("school_year")
+  semester    String?
+  rowCount    Int             @default(0) @map("row_count")
+  summary     Json? // RepairSummary snapshot for fast rendering
+  rows        Json? // raw worksheet rows, kept so apply/rollback is reproducible
+  createdById Int?            @map("created_by_id")
+  appliedBatchId Int?         @map("applied_batch_id")
+  appliedAt   DateTime?       @map("applied_at")
+  createdAt   DateTime        @default(now()) @map("created_at")
+  createdBy   User?           @relation("RepairBy", fields: [createdById], references: [id], onDelete: SetNull)
+  findings    RepairFinding[]
+
+  @@index([createdAt])
+  @@map("repair_sources")
+}
+
+// A single structured issue on one worksheet row. Carries the original value,
+// the deterministic proposal, who decided what and when, and the value that was
+// actually written — so every correction is reversible and auditable.
+model RepairFinding {
+  id           Int          @id @default(autoincrement())
+  sourceId     Int          @map("source_id")
+  rowNumber    Int          @map("row_number")
+  code         String
+  severity     String
+  certainty    String
+  field        String
+  cn           String?
+  original     String?
+  proposed     String?
+  evidence     String?
+  explanation  String
+  status       String       @default("open") // open | accepted | rejected | unresolved | applied
+  appliedValue String?      @map("applied_value")
+  decidedById  Int?         @map("decided_by_id")
+  decidedAt    DateTime?    @map("decided_at")
+  appliedAt    DateTime?    @map("applied_at")
+  createdAt    DateTime     @default(now()) @map("created_at")
+  updatedAt    DateTime     @updatedAt @map("updated_at")
+  source       RepairSource @relation(fields: [sourceId], references: [id], onDelete: Cascade)
+  decidedBy    User?        @relation("RepairDecidedBy", fields: [decidedById], references: [id], onDelete: SetNull)
+
+  @@index([sourceId, status])
+  @@index([sourceId, rowNumber])
+  @@map("repair_findings")
 }
 
 // ---------------------------------------------------------------------------

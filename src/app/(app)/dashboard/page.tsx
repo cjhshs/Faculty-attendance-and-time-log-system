@@ -30,30 +30,34 @@ export default async function DashboardPage({
   return (
     <div className="space-y-6">
       {denied ? (
-        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+        <div className="alert alert-warn">
           You do not have permission to open that page.
         </div>
       ) : null}
 
       <div>
-        <h1 className="text-xl font-bold text-zinc-900">Welcome, {user.name}</h1>
-        <p className="text-sm text-zinc-500">
+        <h1 className="page-title">Welcome, {user.name}</h1>
+        <p className="page-subtitle">
           Current cutoff: {formatLong(start)} &mdash; {formatLong(end)}
         </p>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         {cards.map((card) => (
-          <Link key={card.label} href={card.href} className="card hover:border-blue-300">
-            <p className="text-xs uppercase tracking-wide text-zinc-500">{card.label}</p>
-            <p className="mt-1 text-2xl font-bold text-zinc-900">{card.value}</p>
+          <Link
+            key={card.label}
+            href={card.href}
+            className="card transition-colors hover:border-navy-2 hover:shadow"
+          >
+            <p className="text-xs uppercase tracking-wide text-muted">{card.label}</p>
+            <p className="mt-1 text-2xl font-bold text-navy">{card.value}</p>
           </Link>
         ))}
       </div>
 
       <div className="card">
-        <h2 className="mb-3 text-base font-semibold">Daily workflow</h2>
-        <ol className="list-decimal space-y-1 pl-5 text-sm text-zinc-700">
+        <h2 className="mb-3 section-title">Daily workflow</h2>
+        <ol className="list-decimal space-y-1 pl-5 text-sm text-ink">
           <li>Choose a date and program, then print the attendance sheet.</li>
           <li>After the working students return the paper, encode the check marks.</li>
           <li>Save the attendance for that date and program.</li>

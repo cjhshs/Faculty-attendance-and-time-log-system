@@ -5,6 +5,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { buildSummary } from "@/lib/summary";
 import { parseISODate, cutoffRange, formatLong } from "@/lib/dates";
+import { getActiveTerm, parseTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
 
 export const maxDuration = 60;
@@ -41,9 +42,20 @@ export async function GET(request: Request) {
   const programCode = url.searchParams.get("program");
   const course = programCode ? await prisma.course.findUnique({ where: { code: programCode } }) : null;
 
-  const summary = await buildSummary(start, end, course?.id);
+  const yearParam = url.searchParams.get("schoolYear");
+  const semParam = url.searchParams.get("semester");
+  let selectedTerm;
+  if (yearParam === "all" || semParam === "all") {
+    selectedTerm = null;
+  } else if (yearParam && semParam) {
+    selectedTerm = parseTerm(yearParam, semParam);
+  } else {
+    selectedTerm = await getActiveTerm();
+  }
+
+  const summary = await buildSummary(start, end, course?.id, selectedTerm);
   const generated = new Date().toISOString().slice(0, 10);
-  const rangeLabel = `${formatLong(start)} to ${formatLong(end)}`;
+  const rangeLabel = `${formatLong(start)} to ${formatLong(end)}${selectedTerm ? ` (${selectedTerm.schoolYear} ${selectedTerm.semester})` : ""}`;
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Faculty Attendance System";

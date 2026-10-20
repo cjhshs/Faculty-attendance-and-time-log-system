@@ -19,6 +19,8 @@ const DEFAULT_SETTINGS: Record<string, string> = {
   checked_by: "",
   school_logo: "",
   college_logo: "",
+  active_school_year: "2026-2027",
+  active_semester: "1st Semester",
 };
 
 async function main() {
@@ -72,6 +74,7 @@ async function main() {
   const assistantPermissionNames: string[] = [
     PERMISSIONS.SCHEDULE_IMPORT,
     PERMISSIONS.SCHEDULE_EDIT,
+    PERMISSIONS.SCHEDULE_REPAIR,
     PERMISSIONS.FACULTY_VIEW,
     PERMISSIONS.FACULTY_MANAGE,
     PERMISSIONS.ATTENDANCE_PRINT,

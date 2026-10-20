@@ -10,11 +10,11 @@ export default async function CalendarPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">No-class Calendar</h1>
+      <h1 className="page-title">No-class Calendar</h1>
 
       <div className="grid gap-6 lg:grid-cols-2">
         <section className="card">
-          <h2 className="mb-3 text-base font-semibold">Add a single date</h2>
+          <h2 className="mb-3 section-title">Add a single date</h2>
           <ActionForm action={addHoliday} submitLabel="Add date" resetOnSuccess>
             <div className="grid grid-cols-2 gap-2">
               <div>
@@ -34,7 +34,7 @@ export default async function CalendarPage() {
         </section>
 
         <section className="card">
-          <h2 className="mb-3 text-base font-semibold">Add a date range</h2>
+          <h2 className="mb-3 section-title">Add a date range</h2>
           <ActionForm action={addHolidayRange} submitLabel="Add range" resetOnSuccess>
             <div className="grid grid-cols-3 gap-2">
               <div>
@@ -61,7 +61,7 @@ export default async function CalendarPage() {
       </div>
 
       <section className="card">
-        <h2 className="mb-3 text-base font-semibold">No-class dates ({holidays.length})</h2>
+        <h2 className="mb-3 section-title">No-class dates ({holidays.length})</h2>
         <div className="max-h-96 overflow-auto">
           <table className="data-table">
             <thead>
@@ -89,7 +89,7 @@ export default async function CalendarPage() {
               ))}
               {holidays.length === 0 ? (
                 <tr>
-                  <td colSpan={3} className="text-center text-zinc-400">
+                  <td colSpan={3} className="text-center text-muted">
                     No no-class dates recorded.
                   </td>
                 </tr>

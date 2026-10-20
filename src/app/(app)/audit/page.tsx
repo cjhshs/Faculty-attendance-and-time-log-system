@@ -3,6 +3,8 @@ import { requirePermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { formatLong } from "@/lib/dates";
+import { ScrollArea } from "../ScrollArea";
+import { SearchForm } from "../SearchForm";
 
 export default async function AuditPage({
   searchParams,
@@ -34,30 +36,26 @@ export default async function AuditPage({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">Audit Log</h1>
-        <span className="text-sm text-zinc-500">{total} entr{total === 1 ? "y" : "ies"}</span>
+        <h1 className="page-title">Audit Log</h1>
+        <span className="text-sm text-muted">{total} entr{total === 1 ? "y" : "ies"}</span>
       </div>
 
-      <form className="card flex flex-wrap items-end gap-4" method="get">
-        <div>
-          <label className="label" htmlFor="action">
-            Action contains
-          </label>
-          <input id="action" name="action" className="input" defaultValue={params.action ?? ""} />
-        </div>
-        <button className="btn btn-primary" type="submit">
-          Filter
-        </button>
-      </form>
+      <SearchForm
+        action="/audit"
+        name="action"
+        defaultValue={params.action ?? ""}
+        placeholder="Search action..."
+        className="card max-w-xl"
+      />
 
-      <div className="card overflow-auto">
+      <ScrollArea className="card">
         <table className="data-table">
           <thead>
             <tr>
-              <th>When</th>
-              <th>User</th>
-              <th>Action</th>
-              <th>Details</th>
+              <th scope="col">When</th>
+              <th scope="col">User</th>
+              <th scope="col">Action</th>
+              <th scope="col">Details</th>
             </tr>
           </thead>
           <tbody>
@@ -71,14 +69,14 @@ export default async function AuditPage({
             ))}
             {logs.length === 0 ? (
               <tr>
-                <td colSpan={4} className="text-center text-zinc-400">
+                <td colSpan={4} className="text-center text-muted">
                   No audit entries.
                 </td>
               </tr>
             ) : null}
           </tbody>
         </table>
-      </div>
+      </ScrollArea>
 
       <div className="flex items-center justify-between text-sm">
         {page > 1 ? (

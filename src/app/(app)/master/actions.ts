@@ -69,6 +69,34 @@ export async function updateCourse(formData: FormData): Promise<ActionResult> {
   return { ok: true, message: "Program updated." };
 }
 
+export async function deleteCourse(formData: FormData): Promise<ActionResult> {
+  const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
+  const id = Number(formData.get("id"));
+  const course = await prisma.course.findUnique({ where: { id } });
+  if (!course) return { ok: false, message: "Program not found." };
+
+  const [slots, sessions] = await Promise.all([
+    prisma.scheduleSlot.count({ where: { courseId: id } }),
+    prisma.attendanceSession.count({ where: { courseId: id } }),
+  ]);
+  if (slots > 0 || sessions > 0) {
+    const parts: string[] = [];
+    if (slots > 0) parts.push(`${slots} schedule slot(s)`);
+    if (sessions > 0) parts.push(`${sessions} attendance record set(s)`);
+    return {
+      ok: false,
+      message: `Cannot delete program ${course.code}: it is referenced by ${parts.join(
+        " and ",
+      )}. Remove those records first to preserve historical data.`,
+    };
+  }
+
+  await prisma.course.delete({ where: { id } });
+  await writeAudit(user.id, "course.delete", `Deleted program #${id} ${course.code}`);
+  revalidatePath("/master");
+  return { ok: true, message: `Deleted program ${course.code}.` };
+}
+
 export async function createRoom(formData: FormData): Promise<ActionResult> {
   const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
   const code = String(formData.get("code") || "").trim().toUpperCase();

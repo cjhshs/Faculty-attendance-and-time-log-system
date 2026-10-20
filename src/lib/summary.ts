@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { eachDate, hoursOfRange } from "@/lib/dates";
+import { termWhere, type Term } from "@/lib/terms";
 
 export type FacultySummary = {
   facultyId: number;
@@ -52,13 +53,19 @@ export async function buildSummary(
   start: Date,
   end: Date,
   courseId?: number,
+  term?: Term | null,
 ): Promise<SummaryResult> {
   const dates = eachDate(start, end);
   const dateIsos = new Set(dates.map(iso));
 
+  const slotFilter = {
+    ...(courseId ? { courseId } : {}),
+    ...termWhere(term),
+  };
+
   const [slots, sessions, holidays, attendance] = await Promise.all([
     prisma.scheduleSlot.findMany({
-      where: courseId ? { courseId } : undefined,
+      where: Object.keys(slotFilter).length ? slotFilter : undefined,
       include: { faculty: true, course: true },
     }),
     prisma.attendanceSession.findMany({
@@ -67,7 +74,10 @@ export async function buildSummary(
     }),
     prisma.holiday.findMany({ where: { date: { gte: start, lte: end } } }),
     prisma.attendance.findMany({
-      where: { date: { gte: start, lte: end } },
+      where: {
+        date: { gte: start, lte: end },
+        ...(term ? { slot: termWhere(term) } : {}),
+      },
       select: { slotId: true, date: true, hourStart: true, present: true, reason: true },
     }),
   ]);

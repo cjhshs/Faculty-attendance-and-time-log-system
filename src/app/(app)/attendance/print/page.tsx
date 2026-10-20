@@ -6,6 +6,8 @@ import { getSettings } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
 import { getSlotsForDateAndCourses } from "@/lib/schedule-query";
 import { parseISODate, todayUtc, formatLong } from "@/lib/dates";
+import { getActiveTerm } from "@/lib/terms";
+import { reconcileProgramSheet } from "@/lib/attendance-sheet";
 import { AttendanceSheets } from "../AttendanceSheets";
 import { PrintButton } from "../PrintButton";
 
@@ -30,7 +32,7 @@ export default async function PrintPage({
       : (Array.isArray(rawPrograms) ? rawPrograms : [rawPrograms]).filter((c) => allCodes.includes(c));
 
   const selectedCourses = courses.filter((c) => selectedCodes.includes(c.code));
-  const settings = await getSettings();
+  const [settings, activeTerm] = await Promise.all([getSettings(), getActiveTerm()]);
 
   const holiday = await prisma.holiday.findFirst({ where: { date } });
   const slots = holiday
@@ -38,6 +40,7 @@ export default async function PrintPage({
     : await getSlotsForDateAndCourses(
         date,
         selectedCourses.map((c) => c.id),
+        activeTerm,
       );
 
   // Rooms typed in while encoding (for TBA slots) are reflected on the sheet.
@@ -47,7 +50,7 @@ export default async function PrintPage({
         where: {
           date,
           roomOverride: { not: null },
-          slot: { courseId: { in: selectedCourses.map((c) => c.id) } },
+          slot: { courseId: { in: selectedCourses.map((c) => c.id) }, ...activeTerm },
         },
         select: { slotId: true, roomOverride: true },
       });
@@ -73,11 +76,27 @@ export default async function PrintPage({
       })),
   }));
 
+  // Reconcile each program's rendered grid against its schedule. A mismatch
+  // means a class would silently vanish from the sheet, so printing is blocked.
+  const reconciliations = slotsByCourse.map((entry) => ({
+    code: entry.course.code,
+    result: reconcileProgramSheet(entry.slots),
+  }));
+  const failed = reconciliations.filter((r) => !r.result.ok);
+  const blocked = !holiday && failed.length > 0;
+  const totalHours = reconciliations.reduce((n, r) => n + r.result.renderedHours, 0);
+  const totalMeetings = reconciliations.reduce((n, r) => n + r.result.expectedMeetings, 0);
+
   return (
     <div className="space-y-4">
       <div className="no-print flex flex-wrap items-center justify-between gap-3">
-        <h1 className="text-xl font-bold">Daily Attendance Sheet</h1>
-        <PrintButton label="Print sheet" />
+        <div>
+          <h1 className="page-title">Daily Attendance Sheet</h1>
+          <p className="text-sm text-muted">
+            {activeTerm.schoolYear} · {activeTerm.semester}
+          </p>
+        </div>
+        {blocked ? null : <PrintButton label="Print sheet" />}
       </div>
 
       <form className="no-print card flex flex-wrap items-end gap-4" method="get">
@@ -97,7 +116,7 @@ export default async function PrintPage({
               </label>
             ))}
             {courses.length === 0 ? (
-              <span className="text-sm text-zinc-500">No programs yet. Import a schedule first.</span>
+              <span className="text-sm text-muted">No programs yet. Import a schedule first.</span>
             ) : null}
           </div>
         </div>
@@ -113,6 +132,28 @@ export default async function PrintPage({
         <div className="no-print rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           {formatLong(date)} is marked as a no-class day: <strong>{holiday.label}</strong>. Printing is
           allowed, but scheduled hours on this date are excluded from summaries.
+        </div>
+      ) : null}
+
+      <div className="no-print text-xs text-muted">
+        Reconciliation — {selectedCourses.length} program(s), {totalMeetings} scheduled meeting(s),{" "}
+        {totalHours} rendered class-hour(s).{" "}
+        {blocked ? "" : "All programs reconcile."}
+      </div>
+
+      {blocked ? (
+        <div className="no-print rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-800">
+          <p className="font-semibold">Printing is blocked: the schedule does not reconcile.</p>
+          <ul className="mt-2 list-disc space-y-1 pl-5">
+            {failed.map((r) => (
+              <li key={r.code}>
+                <strong>{r.code}:</strong> {r.result.problems.join(" ")}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2">
+            Fix the overlapping or missing assignments for this date, then generate the sheet again.
+          </p>
         </div>
       ) : null}
 

@@ -4,23 +4,43 @@ import { useState } from "react";
 import type { ImportPlan, CommitResult } from "@/lib/import";
 import { WEEKDAY_SHORT } from "@/lib/dates";
 
-export function ImportClient() {
+export function ImportClient({
+  defaultSchoolYear,
+  defaultSemester,
+  knownYears,
+}: {
+  defaultSchoolYear: string;
+  defaultSemester: string;
+  knownYears: string[];
+}) {
   const [file, setFile] = useState<File | null>(null);
+  const [schoolYear, setSchoolYear] = useState(defaultSchoolYear);
+  const [semester, setSemester] = useState(defaultSemester);
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [result, setResult] = useState<CommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
+  function buildBody() {
+    const body = new FormData();
+    if (file) body.append("file", file);
+    body.append("schoolYear", schoolYear);
+    body.append("semester", semester);
+    return body;
+  }
+
   async function preview() {
     if (!file) return;
+    if (!schoolYear.trim()) {
+      setError("Enter the target academic year (for example 2027-2028).");
+      return;
+    }
     setLoading(true);
     setError(null);
     setResult(null);
     setPlan(null);
     try {
-      const body = new FormData();
-      body.append("file", file);
-      const res = await fetch("/api/schedule/preview", { method: "POST", body });
+      const res = await fetch("/api/schedule/preview", { method: "POST", body: buildBody() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Preview failed.");
       setPlan(data.plan);
@@ -33,18 +53,17 @@ export function ImportClient() {
 
   async function commit() {
     if (!file) return;
+    const termLabel = `${schoolYear.trim()} ${semester}`;
     if (
       !window.confirm(
-        "Save these changes to the schedule? Existing records are updated, never deleted.",
+        `Import this file into ${termLabel}? Existing schedules in that semester are updated, never deleted. Attendance is not affected.`,
       )
     )
       return;
     setLoading(true);
     setError(null);
     try {
-      const body = new FormData();
-      body.append("file", file);
-      const res = await fetch("/api/schedule/commit", { method: "POST", body });
+      const res = await fetch("/api/schedule/commit", { method: "POST", body: buildBody() });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Import failed.");
       setResult(data.result);
@@ -56,13 +75,29 @@ export function ImportClient() {
     }
   }
 
+  function downloadErrors() {
+    if (!plan || plan.errors.length === 0) return;
+    const rows = [["Row", "Issue"]];
+    for (const e of plan.errors) rows.push([String(e.row), e.message]);
+    const csv = rows
+      .map((r) => r.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+      .join("\r\n");
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "schedule-import-invalid-rows.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   return (
     <div className="space-y-6">
-      <div className="card">
-        <label className="label" htmlFor="schedule-file">
-          Schedule Excel file (.xlsx)
-        </label>
-        <div className="flex flex-wrap items-end gap-3">
+      <div className="card space-y-4">
+        <div>
+          <label className="label" htmlFor="schedule-file">
+            Schedule Excel file (.xlsx)
+          </label>
           <input
             id="schedule-file"
             type="file"
@@ -75,30 +110,77 @@ export function ImportClient() {
               setError(null);
             }}
           />
+        </div>
+
+        <div className="flex flex-wrap items-end gap-4 border-t border-line pt-4">
+          <div>
+            <label className="label req" htmlFor="import-year">
+              Target academic year
+            </label>
+            <input
+              id="import-year"
+              list="import-years"
+              className="input"
+              value={schoolYear}
+              onChange={(e) => {
+                setSchoolYear(e.target.value);
+                setPlan(null);
+              }}
+              placeholder="e.g. 2027-2028"
+            />
+            <datalist id="import-years">
+              {knownYears.map((y) => (
+                <option key={y} value={y} />
+              ))}
+            </datalist>
+          </div>
+          <div>
+            <label className="label req" htmlFor="import-sem">
+              Target semester
+            </label>
+            <select
+              id="import-sem"
+              className="select"
+              value={semester}
+              onChange={(e) => {
+                setSemester(e.target.value);
+                setPlan(null);
+              }}
+            >
+              <option value="1st Semester">1st Semester</option>
+              <option value="2nd Semester">2nd Semester</option>
+              <option value="Summer">Summer</option>
+            </select>
+          </div>
           <button className="btn btn-primary" onClick={preview} disabled={!file || loading}>
             {loading ? "Working…" : "Preview import"}
           </button>
         </div>
-        <p className="mt-2 text-xs text-zinc-500">
-          Columns are matched by header name. Nothing is saved until you confirm.
+
+        <p className="text-xs text-muted">
+          Columns are matched by header name. Slots are imported into{" "}
+          <strong>
+            {schoolYear.trim() || "—"} · {semester}
+          </strong>
+          . Nothing is saved until you confirm.
         </p>
       </div>
 
-      {error ? (
-        <div className="rounded-md border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
-          {error}
-        </div>
-      ) : null}
+      {error ? <div className="alert alert-error">{error}</div> : null}
 
       {result ? (
-        <div className="rounded-md border border-green-300 bg-green-50 px-4 py-3 text-sm text-green-800">
-          Import complete: {result.created} added, {result.updated} updated, {result.unchanged}{" "}
-          unchanged. {result.facultyCreated} new faculty, {result.programsCreated} new program(s),{" "}
-          {result.roomsCreated} new room(s).
+        <div className="alert alert-success">
+          Import complete into {schoolYear.trim()} {semester}: {result.created} added,{" "}
+          {result.updated} updated, {result.unchanged} unchanged. {result.facultyCreated} new
+          faculty, {result.programsCreated} new program(s), {result.roomsCreated} new room(s).
+          {result.batchId ? ` Recorded as import batch #${result.batchId}.` : ""}
+          {result.errors > 0 ? ` ${result.errors} row(s) were skipped.` : ""}
         </div>
       ) : null}
 
-      {plan ? <PlanView plan={plan} onConfirm={commit} loading={loading} /> : null}
+      {plan ? (
+        <PlanView plan={plan} onConfirm={commit} loading={loading} onDownloadErrors={downloadErrors} />
+      ) : null}
     </div>
   );
 }
@@ -107,23 +189,61 @@ function PlanView({
   plan,
   onConfirm,
   loading,
+  onDownloadErrors,
 }: {
   plan: ImportPlan;
   onConfirm: () => void;
   loading: boolean;
+  onDownloadErrors: () => void;
 }) {
   const s = plan.summary;
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
-        <Stat label="Rows read" value={s.rowsRead} />
+      {plan.targetTerm ? (
+        <p className="text-sm text-muted">
+          Importing into{" "}
+          <strong>
+            {plan.targetTerm.schoolYear} · {plan.targetTerm.semester}
+          </strong>
+        </p>
+      ) : null}
+
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
+        <Stat label="Rows read" value={s.dataRows} />
         <Stat label="Importable" value={s.importable} />
         <Stat label="New slots" value={s.newSlots} tone="green" />
         <Stat label="Updated" value={s.updatedSlots} tone="blue" />
+        <Stat label="Duplicate" value={s.duplicateSlots} />
         <Stat label="Unchanged" value={s.unchangedSlots} />
         <Stat label="New faculty" value={s.newFaculty} tone="green" />
-        <Stat label="Errors" value={s.errors} tone={s.errors ? "red" : undefined} />
+        <Stat label="Errors" value={s.errorRows} tone={s.errorRows ? "red" : undefined} />
       </div>
+
+      <p className="text-xs text-muted">
+        Reconciliation — worksheet rows: {s.worksheetRows} · data rows: {s.dataRows} · parsed
+        without error: {s.parsedRows} · error rows: {s.errorRows} · warning rows: {s.warningRows} ·
+        meeting entries: {s.meetingEntries} · valid meeting blocks: {s.validBlocks} · faculty
+        conflicts: {s.conflicts}
+      </p>
+
+      {plan.conflicts.length ? (
+        <Section title={`Schedule conflicts (${plan.conflicts.length})`} tone="red">
+          <p className="mb-2 text-xs text-muted">
+            The same instructor is booked in two places at once. Nothing was auto-resolved — review
+            these before committing.
+          </p>
+          <ul className="space-y-1">
+            {plan.conflicts.slice(0, 200).map((c, i) => (
+              <li key={i}>{c.message}</li>
+            ))}
+          </ul>
+          {plan.conflicts.length > 200 ? (
+            <p className="mt-2 text-xs text-muted">
+              Showing the first 200 of {plan.conflicts.length} conflicts.
+            </p>
+          ) : null}
+        </Section>
+      ) : null}
 
       {plan.errors.length ? (
         <Section title={`Errors (${plan.errors.length})`} tone="red">
@@ -134,6 +254,9 @@ function PlanView({
               </li>
             ))}
           </ul>
+          <button type="button" className="btn btn-sm mt-3" onClick={onDownloadErrors}>
+            Download invalid rows (CSV)
+          </button>
         </Section>
       ) : null}
 
@@ -182,30 +305,30 @@ function PlanView({
           <table className="data-table">
             <thead>
               <tr>
-                <th>Row</th>
-                <th>CN</th>
-                <th>Subject</th>
-                <th>Program</th>
-                <th>Day</th>
-                <th>Time</th>
-                <th>Room</th>
-                <th>Faculty</th>
-                <th>Status</th>
+                <th scope="col">Program</th>
+                <th scope="col">CN</th>
+                <th scope="col">Subject</th>
+                <th scope="col">Section</th>
+                <th scope="col">Day</th>
+                <th scope="col">Time</th>
+                <th scope="col">Room</th>
+                <th scope="col">Faculty</th>
+                <th scope="col">Status</th>
               </tr>
             </thead>
             <tbody>
               {plan.slots.slice(0, 500).map((slot, i) => (
                 <tr key={i}>
-                  <td>{slot.rowNumber}</td>
+                  <td>{slot.courseCode}</td>
                   <td className="font-mono text-xs">{slot.cn}</td>
                   <td>{slot.subject}</td>
-                  <td>{slot.courseCode}</td>
+                  <td>{slot.section ?? "—"}</td>
                   <td>{WEEKDAY_SHORT[slot.weekday]}</td>
-                  <td className="whitespace-nowrap">
+                  <td>
                     {slot.start}–{slot.end}
                   </td>
                   <td>{slot.roomCode}</td>
-                  <td>{slot.facultyName ?? <span className="text-zinc-400">TBA</span>}</td>
+                  <td>{slot.facultyName ?? <span className="text-muted">TBA</span>}</td>
                   <td>
                     <span className={"badge " + (SPAN_STATUS[slot.status] ?? "")}>{slot.status}</span>
                   </td>
@@ -215,7 +338,7 @@ function PlanView({
           </table>
         </div>
         {plan.slots.length > 500 ? (
-          <p className="mt-2 text-xs text-zinc-500">
+          <p className="mt-2 text-xs text-muted">
             Showing the first 500 of {plan.slots.length} slots.
           </p>
         ) : null}
@@ -257,11 +380,11 @@ function Stat({
         ? "text-blue-700"
         : tone === "red"
           ? "text-red-700"
-          : "text-zinc-900";
+          : "text-navy";
   return (
     <div className="card">
-      <p className="text-xs uppercase tracking-wide text-zinc-500">{label}</p>
-      <p className={"mt-1 text-xl font-bold " + toneClass}>{value}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
+      <p className={`mt-1 text-lg font-bold ${toneClass}`}>{value}</p>
     </div>
   );
 }
@@ -275,15 +398,15 @@ function Section({
   tone?: "red" | "amber";
   children: React.ReactNode;
 }) {
-  const cls =
+  const toneClass =
     tone === "red"
-      ? "border-red-300 bg-red-50 text-red-800"
+      ? "border-red-300 bg-red-50"
       : tone === "amber"
-        ? "border-amber-300 bg-amber-50 text-amber-900"
-        : "border-zinc-200 bg-white";
+        ? "border-amber-300 bg-amber-50"
+        : "border-line";
   return (
-    <div className={"rounded-lg border p-4 text-sm " + cls}>
-      <h3 className="mb-2 font-semibold">{title}</h3>
+    <div className={`mt-4 rounded-lg border ${toneClass} p-4`}>
+      <h3 className="mb-2 text-sm font-semibold text-navy">{title}</h3>
       {children}
     </div>
   );

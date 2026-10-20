@@ -41,30 +41,30 @@ export default async function UsersPage() {
 
   return (
     <div className="space-y-8">
-      <h1 className="text-xl font-bold">Users and Roles</h1>
+      <h1 className="page-title">Users and Roles</h1>
 
       {canManageUsers ? (
         <section className="card">
-          <h2 className="mb-3 text-base font-semibold">Create user</h2>
+          <h2 className="mb-3 section-title">Create user</h2>
           <ActionForm action={createUser} submitLabel="Create user" resetOnSuccess>
             <div className="grid gap-3 sm:grid-cols-3">
               <div>
-                <label className="label" htmlFor="uname">
+                <label className="label req" htmlFor="uname">
                   Full name
                 </label>
-                <input id="uname" name="name" className="input" />
+                <input id="uname" name="name" className="input" required />
               </div>
               <div>
-                <label className="label" htmlFor="uusername">
+                <label className="label req" htmlFor="uusername">
                   Username
                 </label>
-                <input id="uusername" name="username" className="input" />
+                <input id="uusername" name="username" className="input" required />
               </div>
               <div>
-                <label className="label" htmlFor="upassword">
+                <label className="label req" htmlFor="upassword">
                   Temporary password
                 </label>
-                <input id="upassword" name="password" type="text" className="input" />
+                <input id="upassword" name="password" type="text" className="input" required />
               </div>
             </div>
             <div className="mt-3">
@@ -83,7 +83,7 @@ export default async function UsersPage() {
       ) : null}
 
       <section className="card overflow-auto">
-        <h2 className="mb-3 text-base font-semibold">Users ({users.length})</h2>
+        <h2 className="mb-3 section-title">Users ({users.length})</h2>
         <table className="data-table">
           <thead>
             <tr>
@@ -115,7 +115,7 @@ export default async function UsersPage() {
                       fields={{ userId: u.id }}
                     />
                     <details className="mt-1">
-                      <summary className="cursor-pointer text-xs text-blue-800">Manage</summary>
+                      <summary className="cursor-pointer text-xs text-navy-2">Manage</summary>
                       <div className="mt-2 w-64 space-y-2">
                         <ActionForm action={assignRoles} submitLabel="Save roles">
                           <input type="hidden" name="userId" value={u.id} />
@@ -154,14 +154,14 @@ export default async function UsersPage() {
 
       {canManageRoles ? (
         <section className="card">
-          <h2 className="mb-3 text-base font-semibold">Create role</h2>
+          <h2 className="mb-3 section-title">Create role</h2>
           <ActionForm action={createRole} submitLabel="Create role" resetOnSuccess>
             <div className="grid gap-3 sm:grid-cols-2">
               <div>
-                <label className="label" htmlFor="rname">
+                <label className="label req" htmlFor="rname">
                   Role name
                 </label>
-                <input id="rname" name="name" className="input" />
+                <input id="rname" name="name" className="input" required />
               </div>
               <div>
                 <label className="label" htmlFor="rdesc">
@@ -173,7 +173,7 @@ export default async function UsersPage() {
             <div className="mt-3 space-y-2">
               {Array.from(grouped.entries()).map(([group, list]) => (
                 <div key={group}>
-                  <p className="text-xs font-semibold uppercase text-zinc-500">{group}</p>
+                  <p className="text-xs font-semibold uppercase text-muted">{group}</p>
                   <div className="flex flex-wrap gap-3">
                     {list.map((p) => (
                       <label key={p.id} className="flex items-center gap-1 text-xs">
@@ -190,15 +190,15 @@ export default async function UsersPage() {
       ) : null}
 
       <section className="card space-y-4">
-        <h2 className="text-base font-semibold">Roles ({roles.length})</h2>
+        <h2 className="section-title">Roles ({roles.length})</h2>
         {roles.map((role) => (
-          <div key={role.id} className="rounded-md border border-zinc-200 p-3">
+          <div key={role.id} className="rounded-lg border border-line p-3">
             <div className="mb-2 flex items-center justify-between">
               <div>
                 <p className="font-semibold">
-                  {role.name} {!role.canDelete ? <span className="text-xs text-zinc-500">(protected)</span> : null}
+                  {role.name} {!role.canDelete ? <span className="text-xs text-muted">(protected)</span> : null}
                 </p>
-                <p className="text-xs text-zinc-500">{role.description}</p>
+                <p className="text-xs text-muted">{role.description}</p>
               </div>
               {canManageRoles && role.canDelete ? (
                 <ActionButton
@@ -216,7 +216,7 @@ export default async function UsersPage() {
                 <div className="space-y-2">
                   {Array.from(grouped.entries()).map(([group, list]) => (
                     <div key={group}>
-                      <p className="text-xs font-semibold uppercase text-zinc-500">{group}</p>
+                      <p className="text-xs font-semibold uppercase text-muted">{group}</p>
                       <div className="flex flex-wrap gap-3">
                         {list.map((p) => {
                           const assigned = role.rolePermissions.some(
@@ -225,7 +225,7 @@ export default async function UsersPage() {
                           const grantable = canGrant(p.name);
                           if (!grantable) {
                             return assigned ? (
-                              <span key={p.id} className="text-xs text-zinc-500">
+                              <span key={p.id} className="text-xs text-muted">
                                 {p.name}
                                 <input type="hidden" name="permissionIds" value={p.id} />
                               </span>
@@ -249,7 +249,7 @@ export default async function UsersPage() {
                 </div>
               </ActionForm>
             ) : (
-              <p className="text-xs text-zinc-500">
+              <p className="text-xs text-muted">
                 {role.rolePermissions.map((rp) => rp.permission.name).join(", ")}
               </p>
             )}

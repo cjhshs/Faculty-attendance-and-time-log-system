@@ -10,29 +10,55 @@ export function ChangePasswordForm() {
 
   return (
     <form action={action} className="space-y-4">
+      {state.error ? (
+        <p role="alert" className="alert alert-error">
+          <span>{state.error}</span>
+        </p>
+      ) : null}
       <div>
-        <label className="label" htmlFor="current">
+        <label className="label req" htmlFor="current">
           Current password
         </label>
-        <input id="current" name="current" type="password" className="input" autoComplete="current-password" />
+        <input
+          id="current"
+          name="current"
+          type="password"
+          className="input"
+          autoComplete="current-password"
+          required
+        />
       </div>
       <div>
-        <label className="label" htmlFor="next">
+        <label className="label req" htmlFor="next">
           New password
         </label>
-        <input id="next" name="next" type="password" className="input" autoComplete="new-password" />
+        <input
+          id="next"
+          name="next"
+          type="password"
+          className="input"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
+        <span className="hint">At least 8 characters.</span>
       </div>
       <div>
-        <label className="label" htmlFor="confirm">
+        <label className="label req" htmlFor="confirm">
           Confirm new password
         </label>
-        <input id="confirm" name="confirm" type="password" className="input" autoComplete="new-password" />
+        <input
+          id="confirm"
+          name="confirm"
+          type="password"
+          className="input"
+          autoComplete="new-password"
+          minLength={8}
+          required
+        />
       </div>
-      {state.error ? (
-        <p className="rounded-md bg-red-50 px-3 py-2 text-sm text-red-700">{state.error}</p>
-      ) : null}
       <button type="submit" className="btn btn-primary w-full" disabled={pending}>
-        {pending ? "Saving…" : "Change password"}
+        {pending ? "Saving…" : "Save new password"}
       </button>
     </form>
   );

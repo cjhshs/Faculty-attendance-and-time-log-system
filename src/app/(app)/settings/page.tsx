@@ -16,10 +16,10 @@ export default async function SettingsPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-xl font-bold">Settings</h1>
+      <h1 className="page-title">Settings</h1>
 
       <div className="card max-w-3xl">
-        <h2 className="mb-3 text-base font-semibold">School header and signatories</h2>
+        <h2 className="mb-3 section-title">School header and signatories</h2>
         <ActionForm action={saveSettings} submitLabel="Save settings">
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2">
@@ -69,10 +69,10 @@ export default async function SettingsPage() {
       </div>
 
       <div className="card">
-        <h2 className="mb-2 text-base font-semibold">Master lists</h2>
-        <p className="text-sm text-zinc-600">
+        <h2 className="mb-2 section-title">Master lists</h2>
+        <p className="text-sm text-muted">
           {facultyCount} faculty, {courseCount} programs, {roomCount} rooms. Manage them on the{" "}
-          <a href="/master" className="text-blue-800 underline">
+          <a href="/master" className="text-navy-2 underline">
             Master Data
           </a>{" "}
           page.
