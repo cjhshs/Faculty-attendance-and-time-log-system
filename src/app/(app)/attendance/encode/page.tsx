@@ -3,32 +3,52 @@ import { requirePermission, hasPermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getCourses } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
+import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { getSlotsForDateAndCourses } from "@/lib/schedule-query";
 import { buildProgramSheet, type SheetSlot } from "@/lib/attendance-sheet";
 import { parseISODate, todayUtc, formatLong, hoursOfRange } from "@/lib/dates";
 import { getActiveTerm } from "@/lib/terms";
+import { CollegeCourseFilter } from "../../CollegeCourseFilter";
 import { EncodeClient, type EncodeRow, type EncodeColumn, type EncodeCell } from "./EncodeClient";
 
 export default async function EncodePage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string; program?: string }>;
+  searchParams: Promise<{ date?: string; program?: string; college?: string }>;
 }) {
   const user = await requirePermission(PERMISSIONS.ATTENDANCE_ENCODE);
   const params = await searchParams;
   const date = parseISODate(params.date ?? null) ?? todayUtc();
   const isoDate = date.toISOString().slice(0, 10);
 
-  const courses = await getCourses();
-  const selected = params.program
-    ? courses.find((c) => c.code === params.program)
-    : courses[0];
+  const [courses, collegeOptions] = await Promise.all([getCourses(), getCollegeOptions()]);
+  const scope = normalizeScopeSelection(collegeOptions, {
+    college: params.college,
+    program: params.program,
+  });
+  const pool = scope.program
+    ? courses.filter((c) => c.code === scope.program)
+    : scope.college
+      ? courses.filter((c) =>
+          scope.college === "unassigned"
+            ? c.collegeId == null
+            : c.college?.code === scope.college,
+        )
+      : courses;
+  const selected = pool[0];
 
   if (!selected) {
     return (
       <div className="space-y-4">
         <h1 className="page-title">Encode Attendance</h1>
-        <p className="page-subtitle">No programs available. Import a schedule first.</p>
+        <p className="page-subtitle">
+          {scope.college || scope.program
+            ? "No programs match the selected college/course. Choose another scope or clear the filter."
+            : "No programs available. Import a schedule first."}
+        </p>
+        <Link href="/attendance/encode" className="btn">
+          Clear filters
+        </Link>
       </div>
     );
   }
@@ -111,8 +131,19 @@ export default async function EncodePage({
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h1 className="page-title">Encode Attendance</h1>
-        <Link href={`/attendance/print?date=${isoDate}&programs=${selected.code}`} className="btn">
+        <div>
+          <h1 className="page-title">Encode Attendance</h1>
+          <p className="text-sm text-muted">
+            Scope: <strong>{selected.code}</strong>
+            {selected.college ? ` — ${selected.college.name}` : " — Unassigned"}
+          </p>
+        </div>
+        <Link
+          href={`/attendance/print?date=${isoDate}&college=${encodeURIComponent(
+            scope.college ?? "",
+          )}&programs=${encodeURIComponent(selected.code)}`}
+          className="btn"
+        >
           View printable sheet
         </Link>
       </div>
@@ -124,18 +155,13 @@ export default async function EncodePage({
           </label>
           <input id="date" type="date" name="date" defaultValue={isoDate} className="input" />
         </div>
-        <div>
-          <label className="label" htmlFor="program">
-            Program
-          </label>
-          <select id="program" name="program" defaultValue={selected.code} className="input">
-            {courses.map((c) => (
-              <option key={c.id} value={c.code}>
-                {c.code}
-              </option>
-            ))}
-          </select>
-        </div>
+        <CollegeCourseFilter
+          colleges={collegeOptions.colleges}
+          unassigned={collegeOptions.unassigned}
+          college={scope.college ?? ""}
+          program={selected.code}
+          idPrefix="encode"
+        />
         <button type="submit" className="btn btn-primary">
           Load
         </button>

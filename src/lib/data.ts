@@ -1,7 +1,10 @@
 import { prisma } from "@/lib/prisma";
 
 export async function getCourses() {
-  return prisma.course.findMany({ orderBy: { code: "asc" } });
+  return prisma.course.findMany({
+    include: { college: { select: { code: true, name: true, sortOrder: true } } },
+    orderBy: [{ college: { sortOrder: "asc" } }, { code: "asc" }],
+  });
 }
 
 export async function getRooms() {

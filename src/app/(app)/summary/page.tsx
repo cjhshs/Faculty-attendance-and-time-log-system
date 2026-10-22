@@ -2,10 +2,12 @@ import Link from "next/link";
 import { requirePermission, hasPermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getCourses } from "@/lib/data";
+import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { buildSummary } from "@/lib/summary";
 import { cutoffRange, parseISODate, todayUtc, formatLong } from "@/lib/dates";
 import { getActiveTerm, listTerms, parseTerm } from "@/lib/terms";
 import { ScrollArea } from "../ScrollArea";
+import { CollegeCourseFilter } from "../CollegeCourseFilter";
 
 export default async function SummaryPage({
   searchParams,
@@ -14,6 +16,7 @@ export default async function SummaryPage({
     start?: string;
     end?: string;
     program?: string;
+    college?: string;
     q?: string;
     year?: string;
     sem?: string;
@@ -42,9 +45,27 @@ export default async function SummaryPage({
   }
 
   const q = (params.q ?? "").trim().toLowerCase();
-  const courses = await getCourses();
-  const course = params.program ? courses.find((c) => c.code === params.program) : undefined;
-  const summary = await buildSummary(start, end, course?.id, selectedTerm);
+  const [courses, collegeOptions] = await Promise.all([getCourses(), getCollegeOptions()]);
+  const scope = normalizeScopeSelection(collegeOptions, {
+    college: params.college,
+    program: params.program,
+  });
+  const course = scope.program ? courses.find((c) => c.code === scope.program) : undefined;
+  const scopedCourseIds = scope.program
+    ? courses.filter((c) => c.code === scope.program).map((c) => c.id)
+    : scope.college === "unassigned"
+      ? courses.filter((c) => c.collegeId == null).map((c) => c.id)
+      : scope.college
+        ? courses.filter((c) => c.college?.code === scope.college).map((c) => c.id)
+        : null;
+  const scopeLabel = course
+    ? `${course.code}${course.college ? ` — ${course.college.name}` : ""}`
+    : scope.college === "unassigned"
+      ? `Unassigned programs (${scopedCourseIds?.length ?? 0})`
+      : scope.college
+        ? `${scope.college} — ${collegeOptions.colleges.find((c) => c.code === scope.college)?.name ?? ""} (${scopedCourseIds?.length ?? 0} program(s))`
+        : "All colleges";
+  const summary = await buildSummary(start, end, scopedCourseIds ?? undefined, selectedTerm);
   const shownFaculty = q
     ? summary.faculty.filter((f) => f.name.toLowerCase().includes(q))
     : summary.faculty;
@@ -53,6 +74,7 @@ export default async function SummaryPage({
     start: start.toISOString().slice(0, 10),
     end: end.toISOString().slice(0, 10),
     ...(course ? { program: course.code } : {}),
+    ...(scope.college ? { college: scope.college } : {}),
     ...(selectedTerm
       ? { schoolYear: selectedTerm.schoolYear, semester: selectedTerm.semester }
       : {}),
@@ -113,19 +135,13 @@ export default async function SummaryPage({
             <option value="all">All semesters</option>
           </select>
         </div>
-        <div>
-          <label className="label" htmlFor="program">
-            Program
-          </label>
-          <select id="program" name="program" defaultValue={course?.code ?? ""} className="input">
-            <option value="">All programs</option>
-            {courses.map((c) => (
-              <option key={c.id} value={c.code}>
-                {c.code}
-              </option>
-            ))}
-          </select>
-        </div>
+        <CollegeCourseFilter
+          colleges={collegeOptions.colleges}
+          unassigned={collegeOptions.unassigned}
+          college={scope.college ?? ""}
+          program={scope.program ?? ""}
+          idPrefix="summary"
+        />
         <div className="min-w-56 flex-1">
           <label className="label" htmlFor="q">
             Find faculty
@@ -145,8 +161,8 @@ export default async function SummaryPage({
       </form>
 
       <p className="text-sm text-muted">
-        Range: <strong>{formatLong(start)}</strong> to <strong>{formatLong(end)}</strong>
-        {course ? ` — program ${course.code}` : " — all programs"}.{" "}
+        Range: <strong>{formatLong(start)}</strong> to <strong>{formatLong(end)}</strong> —{" "}
+        <strong>{scopeLabel}</strong>.{" "}
         {selectedTerm
           ? `Term: ${selectedTerm.schoolYear} · ${selectedTerm.semester}.`
           : "All semesters."}{" "}

@@ -62,7 +62,7 @@ body {
 
   /* Buttons ----------------------------------------------------------- */
   .btn {
-    @apply inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-navy shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-navy shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
     @apply border-navy bg-navy text-white hover:bg-navy-deep;

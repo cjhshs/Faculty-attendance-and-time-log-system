@@ -53,10 +53,50 @@ export async function createCourse(formData: FormData): Promise<ActionResult> {
   if (!code) return { ok: false, message: "Program code is required." };
   const exists = await prisma.course.findUnique({ where: { code } });
   if (exists) return { ok: false, message: "That program already exists." };
-  await prisma.course.create({ data: { code, name } });
-  await writeAudit(user.id, "course.create", `Created program ${code}`);
+  const rawCollege = String(formData.get("collegeId") || "").trim();
+  const collegeId = rawCollege ? Number(rawCollege) : null;
+  if (collegeId !== null && !Number.isInteger(collegeId)) {
+    return { ok: false, message: "Invalid college." };
+  }
+  await prisma.course.create({ data: { code, name, collegeId } });
+  await writeAudit(user.id, "course.create", `Created program ${code}${collegeId ? ` in college #${collegeId}` : ""}`);
   revalidatePath("/master");
   return { ok: true, message: `Added program ${code}.` };
+}
+
+// Assign (or clear) the college of a program. This is how an unassigned course
+// code found in a workbook gets a home without touching any schedule or
+// attendance row; the program id and its slots stay exactly as they were.
+export async function assignCourseCollege(formData: FormData): Promise<ActionResult> {
+  const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
+  const id = Number(formData.get("id"));
+  if (!id) return { ok: false, message: "Program is required." };
+
+  const raw = String(formData.get("collegeId") || "").trim();
+  const collegeId = raw ? Number(raw) : null;
+  if (collegeId !== null && !Number.isInteger(collegeId)) {
+    return { ok: false, message: "Invalid college." };
+  }
+
+  const [course, college] = await Promise.all([
+    prisma.course.findUnique({ where: { id } }),
+    collegeId ? prisma.college.findUnique({ where: { id: collegeId } }) : Promise.resolve(null),
+  ]);
+  if (!course) return { ok: false, message: "Program not found." };
+  if (collegeId !== null && !college) return { ok: false, message: "College not found." };
+
+  await prisma.course.update({ where: { id }, data: { collegeId } });
+  await writeAudit(
+    user.id,
+    "course.college",
+    `${course.code} college set to ${college ? college.code : "unassigned"}`,
+  );
+  revalidatePath("/master");
+  revalidatePath("/schedule");
+  return {
+    ok: true,
+    message: `${course.code} assigned to ${college ? `${college.code} — ${college.name}` : "Unassigned"}.`,
+  };
 }
 
 export async function updateCourse(formData: FormData): Promise<ActionResult> {

@@ -22,13 +22,6 @@ export type EncodeRow = {
 
 export type EncodeColumn = { facultyId: number; label: string };
 
-type CellValue = { present: boolean; reason: string; roomOverride: string };
-
-type LayoutCell =
-  | { type: "room"; room: string; span: number }
-  | { type: "covered" }
-  | { type: "empty" };
-
 export function EncodeClient({
   date,
   courseCode,

@@ -1,12 +1,11 @@
 import Link from "next/link";
 import { requirePermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
-import { getCourses } from "@/lib/data";
 import { getSettings } from "@/lib/settings";
 import { buildSummary } from "@/lib/summary";
-import { prisma } from "@/lib/prisma";
 import { cutoffRange, parseISODate, formatLong } from "@/lib/dates";
 import { getActiveTerm, parseTerm } from "@/lib/terms";
+import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { PrintButton } from "../../attendance/PrintButton";
 
 export default async function SummaryPrintPage({
@@ -16,6 +15,7 @@ export default async function SummaryPrintPage({
     start?: string;
     end?: string;
     program?: string;
+    college?: string;
     faculty?: string;
     schoolYear?: string;
     semester?: string;
@@ -28,7 +28,27 @@ export default async function SummaryPrintPage({
   const start = parseISODate(params.start ?? null) ?? def.start;
   const end = parseISODate(params.end ?? null) ?? def.end;
 
-  const course = params.program ? await prisma.course.findUnique({ where: { code: params.program } }) : null;
+  const collegeOptions = await getCollegeOptions();
+  const scope = normalizeScopeSelection(collegeOptions, {
+    college: params.college,
+    program: params.program,
+  });
+  const course = scope.program
+    ? { code: scope.program, name: collegeOptions.all.find((p) => p.code === scope.program)?.name ?? null }
+    : null;
+  const scopedCourseIds = scope.program
+    ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
+    : scope.college === "unassigned"
+      ? collegeOptions.unassigned.map((p) => p.id)
+      : scope.college
+        ? collegeOptions.colleges.find((c) => c.code === scope.college)?.programs.map((p) => p.id) ?? []
+        : null;
+  const collegeName =
+    scope.college === "unassigned"
+      ? "Unassigned programs"
+      : scope.college
+        ? collegeOptions.colleges.find((c) => c.code === scope.college)?.name ?? null
+        : null;
   const facultyFilter = params.faculty ? Number(params.faculty) : null;
 
   const activeTerm = await getActiveTerm();
@@ -37,7 +57,7 @@ export default async function SummaryPrintPage({
       ? parseTerm(params.schoolYear, params.semester)
       : activeTerm;
 
-  const summary = await buildSummary(start, end, course?.id, selectedTerm);
+  const summary = await buildSummary(start, end, scopedCourseIds ?? undefined, selectedTerm);
   const settings = await getSettings();
   const rows = facultyFilter
     ? summary.faculty.filter((f) => f.facultyId === facultyFilter)
@@ -61,7 +81,7 @@ export default async function SummaryPrintPage({
           <p className="text-base font-bold tracking-widest">ATTENDANCE SUMMARY</p>
           <p className="text-xs">
             Range: {formatLong(start)} to {formatLong(end)}
-            {course ? ` — Program: ${course.code}` : ""}
+            {course ? ` — Program: ${course.code}` : collegeName ? ` — College: ${collegeName}` : ""}
             {selectedTerm ? ` — ${selectedTerm.schoolYear} ${selectedTerm.semester}` : ""} |
             Generated: {generated}
           </p>

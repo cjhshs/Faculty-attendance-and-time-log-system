@@ -52,14 +52,22 @@ function iso(d: Date) {
 export async function buildSummary(
   start: Date,
   end: Date,
-  courseId?: number,
+  courseScope?: number | number[] | null,
   term?: Term | null,
 ): Promise<SummaryResult> {
   const dates = eachDate(start, end);
-  const dateIsos = new Set(dates.map(iso));
+
+  // A single program id, a list of ids (one college), or nothing (all).
+  const courseIds =
+    courseScope == null
+      ? null
+      : Array.isArray(courseScope)
+        ? courseScope
+        : [courseScope];
+  const courseFilter = courseIds ? { in: courseIds } : undefined;
 
   const slotFilter = {
-    ...(courseId ? { courseId } : {}),
+    ...(courseIds ? { courseId: courseFilter } : {}),
     ...termWhere(term),
   };
 
@@ -69,7 +77,7 @@ export async function buildSummary(
       include: { faculty: true, course: true },
     }),
     prisma.attendanceSession.findMany({
-      where: { date: { gte: start, lte: end }, ...(courseId ? { courseId } : {}) },
+      where: { date: { gte: start, lte: end }, ...(courseIds ? { courseId: courseFilter } : {}) },
       select: { date: true, courseId: true, status: true },
     }),
     prisma.holiday.findMany({ where: { date: { gte: start, lte: end } } }),

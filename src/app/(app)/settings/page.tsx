@@ -15,10 +15,10 @@ export default async function SettingsPage() {
   ]);
 
   return (
-    <div className="space-y-6">
+    <div className="max-w-3xl space-y-6">
       <h1 className="page-title">Settings</h1>
 
-      <div className="card max-w-3xl">
+      <div className="card">
         <h2 className="mb-3 section-title">School header and signatories</h2>
         <ActionForm action={saveSettings} submitLabel="Save settings">
           <div className="grid gap-3 sm:grid-cols-2">

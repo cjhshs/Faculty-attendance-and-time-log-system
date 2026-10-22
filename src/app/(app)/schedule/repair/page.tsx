@@ -19,7 +19,7 @@ const CATEGORIES: { key: string; label: string; codes: string[] | null }[] = [
   { key: "instructor", label: "Instructors", codes: ["MISSING_INSTRUCTOR", "NAME_UNMATCHED", "NAME_AMBIGUOUS", "NAME_FORMAT"] },
   { key: "room", label: "Rooms", codes: ["ROOM_MISSING", "ROOM_LAB_SUFFIX"] },
   { key: "duplicates", label: "Duplicates", codes: ["DUP_EXACT", "DUP_POSSIBLE"] },
-  { key: "conflicts", label: "Conflicts", codes: ["CONFLICT_OVERLAP"] },
+  { key: "conflicts", label: "Conflicts", codes: ["CONFLICT_OVERLAP", "COMBINED_SECTIONS"] },
   { key: "hours", label: "Hours", codes: ["HOURS_MISMATCH", "SLOT_DUP_IN_CELL"] },
   { key: "whitespace", label: "Formatting", codes: ["WS_WHITESPACE"] },
 ];

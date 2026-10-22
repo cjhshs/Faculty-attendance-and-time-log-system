@@ -97,15 +97,37 @@ model Faculty {
   @@map("faculty")
 }
 
-model Course {
-  id        Int            @id @default(autoincrement())
-  code      String         @unique
-  name      String?
-  createdAt DateTime       @default(now()) @map("created_at")
-  updatedAt DateTime       @updatedAt @map("updated_at")
-  slots     ScheduleSlot[]
-  sessions  AttendanceSession[]
+// A college/department. Programs (Course) point at one college; a program with
+// no college is "unassigned" and waits for an administrator decision.
+model College {
+  id        Int      @id @default(autoincrement())
+  code      String   @unique
+  name      String
+  sortOrder Int      @default(0) @map("sort_order")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  courses   Course[]
 
+  @@map("colleges")
+}
+
+model Course {
+  id         Int            @id @default(autoincrement())
+  code       String         @unique
+  name       String?
+  collegeId  Int?           @map("college_id")
+  // The value as written in the source workbook, kept even when the normalized
+  // program code differs.
+  sourceCode String?        @map("source_code")
+  // False for programs that are not in the school's official program list.
+  official   Boolean        @default(true)
+  createdAt  DateTime       @default(now()) @map("created_at")
+  updatedAt  DateTime       @updatedAt @map("updated_at")
+  college    College?       @relation(fields: [collegeId], references: [id], onDelete: SetNull)
+  slots      ScheduleSlot[]
+  sessions   AttendanceSession[]
+
+  @@index([collegeId])
   @@map("courses")
 }
 

@@ -207,8 +207,19 @@ describe("analyzeWorkbook — real workbook", () => {
   });
 
   it("reports every real same-time instructor clash", () => {
-    expect(report.summary.conflictFindings).toBe(143);
-    expect(report.conflicts.length).toBe(143);
+    expect(report.summary.conflictFindings).toBe(17);
+    expect(report.conflicts.length).toBe(35);
+    expect(report.conflicts.filter((c) => c.kind === "CONFLICT")).toHaveLength(17);
+  });
+
+  it("separates same-subject concurrent sections from real clashes", () => {
+    const combined = report.findings.filter((f) => f.code === "COMBINED_SECTIONS");
+    expect(combined).toHaveLength(18);
+    expect(combined.filter((f) => /Crujedo/.test(f.explanation))).toHaveLength(1);
+  });
+
+  it("never reports one class twice as a clash", () => {
+    for (const c of report.conflicts) expect(c.a.cn).not.toBe(c.b.cn);
   });
 
   it("never renders more sheet hours than scheduled hours", () => {

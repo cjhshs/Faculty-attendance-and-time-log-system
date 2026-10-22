@@ -67,7 +67,7 @@ export function ScheduleTable({
 
   return (
     <>
-      <table className="data-table">
+      <table className="data-table [&_td]:px-2 [&_th]:px-2">
         <thead>
           <tr>
             <th scope="col">Program</th>
@@ -123,15 +123,17 @@ export function ScheduleTable({
                       <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
                         <path d="M13.586 2.586a2 2 0 112.828 2.828l-9.9 9.9a1 1 0 01-.44.254l-3.5 1a1 1 0 01-1.238-1.238l1-3.5a1 1 0 01.254-.44l9.996-9.996zM12.172 4l1.414 1.414L15.414 3.586a1 1 0 10-1.414-1.414L12.172 4zM4.293 12.707l6.01-6.01 1.414 1.414-6.01 6.01-1.414-1.414z" />
                       </svg>
-                      Edit
                     </button>
                     <button
                       type="button"
                       onClick={() => setDeleting(s)}
                       className="btn btn-sm btn-danger ml-2"
-                      title={s.attendanceCount > 0 ? "Has attendance — cannot be deleted" : "Delete"}
+                      title={s.attendanceCount > 0 ? "Has attendance — cannot be deleted" : "Delete schedule"}
+                      aria-label={`Delete schedule ${s.cn}`}
                     >
-                      Delete
+                      <svg viewBox="0 0 20 20" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
+                        <path d="M8.75 1a.75.75 0 00-.75.75V3H4.5a.75.75 0 000 1.5h.4l.7 12.1A2.5 2.5 0 008.1 19h3.8a2.5 2.5 0 002.5-2.4l.7-12.1h.4a.75.75 0 000-1.5H12V1.75A.75.75 0 0011.25 1h-2.5zM6.6 4.5h6.8l-.7 12a1 1 0 01-1 .95H8.3a1 1 0 01-1-.95l-.7-12zM8.5 7a.75.75 0 011.5 0v7a.75.75 0 01-1.5 0V7zm3 0a.75.75 0 011.5 0v7a.75.75 0 01-1.5 0V7z" />
+                      </svg>
                     </button>
                   </td>
                 ) : null}

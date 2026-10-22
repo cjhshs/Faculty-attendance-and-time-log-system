@@ -106,6 +106,22 @@ reported as a reconciliation discrepancy, never silently dropped.
 
 ## Actual instructor conflicts
 
-**143 overlapping pairs** (same instructor, same weekday, overlapping interval),
-including the known `Buhat` 12:00, `Fajartin` 12:00 and `Pascual` 15:00 double‑bookings.
-These are reported for review; the engine never resolves them silently.
+Overlaps are classified by one shared pure function (`classifyOverlaps` in
+`src/lib/import.ts`) used by both the importer and the repair engine, so the two
+surfaces can never disagree. On `attendance_to_import.xlsx`:
+
+| Class | Count | Meaning |
+| --- | --- | --- |
+| `CONFLICT_OVERLAP` | **17** | Different classes booked on one instructor at the same time. |
+| `COMBINED_SECTIONS` | **18** | Same subject taught to several sections at once (needs confirmation, not an error). |
+| duplicate record | **9** | One class listed twice (same CN, or same subject+section under two CNs). Not a clash. |
+
+The 17 real clashes affect 8 instructors: Arriza, Claver, Espinosa, Jamero,
+Nosotros, Pascual, Saligumba, Tabal. A Mon–Fri clash is reported **once** with all
+five weekdays, and a same-subject block shared by six sections is reported once
+with the full CN list — never as one finding per day or per section pair.
+
+An earlier version counted **143** overlapping pairs, because it treated
+same-CN duplicates, alternative rooms/durations in one cell, and concurrent
+sections of one subject as clashes. Those are now classified separately above.
+

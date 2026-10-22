@@ -1,8 +1,16 @@
-import * as XLSX from "xlsx";
+﻿import * as XLSX from "xlsx";
 import { prisma } from "@/lib/prisma";
 import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/lib/schedule-parser";
 import { normalizeSemester } from "@/lib/terms";
 import { timeToMinutes, WEEKDAY_NAMES } from "@/lib/dates";
+import { programNameFor } from "@/lib/program-names";
+import {
+  COLLEGE_DEFS,
+  UNASSIGNED_COLLEGE_VALUE,
+  collegeNameFor,
+  normalizeCourseCode,
+  programForCode,
+} from "@/lib/college-catalog";
 
 export type ImportTargetTerm = { schoolYear: string; semester: string };
 
@@ -47,13 +55,60 @@ export type PlannedSlot = {
   messages: string[];
 };
 
+// How an overlapping pair should be read by a human reviewer:
+//   CONFLICT  — different classes booked on the same instructor at the same time.
+//   COMBINED  — the same subject taught to two sections at once (may be an
+//               intentional combined class; still needs a decision).
+//   DUPLICATE — one class recorded twice (same CN, or same subject+section under
+//               different CNs) with overlapping times. Not a real conflict.
+export type ImportConflictKind = "CONFLICT" | "COMBINED" | "DUPLICATE";
+
+export type ImportConflictParty = {
+  rowNumber: number;
+  cn: string;
+  subject: string;
+  section: string | null;
+  courseCode: string;
+  start: string;
+  end: string;
+  roomCode: string;
+};
+
 export type ImportConflict = {
+  kind: ImportConflictKind;
+  blocking: boolean;
   facultyName: string;
   weekday: number;
+  weekdays: number[];
   sameClassNumber: boolean;
-  a: { rowNumber: number; cn: string; subject: string; courseCode: string; start: string; end: string; roomCode: string };
-  b: { rowNumber: number; cn: string; subject: string; courseCode: string; start: string; end: string; roomCode: string };
+  sameSubject: boolean;
+  sameSection: boolean;
+  a: ImportConflictParty;
+  b: ImportConflictParty;
+  // For COMBINED blocks: every class number meeting together at once.
+  cnList: string[];
   message: string;
+  recommendation: string;
+};
+
+export type IncompleteSchedule = {
+  row: number;
+  cn: string;
+  subject: string;
+  section: string | null;
+  courseCode: string;
+  schedule: string;
+  message: string;
+};
+
+export type TbaClassroom = {
+  row: number;
+  cn: string;
+  subject: string;
+  section: string | null;
+  courseCode: string;
+  facultyName: string | null;
+  weekdays: number[];
 };
 
 export type ImportReconciliation = {
@@ -64,6 +119,33 @@ export type ImportReconciliation = {
   warningRows: number;
   meetingEntries: number;
   validBlocks: number;
+};
+
+// One program (Excel `Course` value) found in the uploaded workbook, with the
+// college it maps to and what will happen to it on commit. Shown to the
+// administrator before anything is written.
+export type ProgramMapping = {
+  code: string;
+  sourceCodes: string[];
+  name: string | null;
+  collegeCode: string | null;
+  collegeName: string | null;
+  official: boolean;
+  inCatalog: boolean;
+  rows: number;
+  slots: number;
+  faculty: number;
+  firstRow: number;
+};
+
+// Which part of the workbook a commit should write. The preview always validates
+// the whole file, so cross-department instructor conflicts stay visible.
+export type ImportScope = {
+  college?: string | null;
+  program?: string | null;
+  // Normalized program code -> college code (null = unassigned) as stored in
+  // the database, so an administrator's reassignment wins over the catalog.
+  collegeByCode?: Record<string, string | null>;
 };
 
 export type ImportSummary = ImportReconciliation & {
@@ -78,6 +160,14 @@ export type ImportSummary = ImportReconciliation & {
   errors: number;
   warnings: number;
   conflicts: number;
+  combinedClasses: number;
+  duplicateSchedules: number;
+  incompleteSchedules: number;
+  tbaClassrooms: number;
+  programsInFile: number;
+  programsMapped: number;
+  programsUnassigned: number;
+  programsUnknown: number;
 };
 
 export type ImportPlan = {
@@ -87,6 +177,11 @@ export type ImportPlan = {
   errors: { row: number; message: string }[];
   warnings: { row: number; message: string }[];
   conflicts: ImportConflict[];
+  combinedClasses: ImportConflict[];
+  duplicateSchedules: ImportConflict[];
+  incompleteSchedules: IncompleteSchedule[];
+  tbaClassrooms: TbaClassroom[];
+  programMapping: ProgramMapping[];
   newFacultyNames: string[];
   unassigned: { row: number; cn: string; subject: string }[];
   duplicateFacultyNames: { name: string; similarTo: string; row: number }[];
@@ -156,12 +251,60 @@ function similarity(a: string, b: string): number {
   return (2 * inter) / (a2.size + b2.size);
 }
 
-// Detect instructors booked in two places at the same time on the same weekday.
-// Nothing is resolved silently: every overlapping pair is reported so the dean
-// can decide which class the schedule should keep.
-export function detectFacultyConflicts(slots: PlannedSlot[]): ImportConflict[] {
-  const byFacultyDay = new Map<string, PlannedSlot[]>();
-  for (const slot of slots) {
+// A class is identified by CN + subject + section. Two meetings that share all
+// three describe the same class, even if the sheet repeats it with a different
+// room or a longer end time.
+export type OverlapCandidate = {
+  rowNumber: number;
+  cn: string;
+  subject: string;
+  section: string | null;
+  courseCode: string;
+  facultyName: string | null;
+  weekday: number;
+  start: string;
+  end: string;
+  roomCode: string;
+};
+
+function classKey(item: OverlapCandidate): string {
+  return `${item.cn.trim()}|${nameKey(item.subject)}|${(item.section ?? "").trim().toUpperCase()}`;
+}
+
+function subjectKey(item: OverlapCandidate): string {
+  return nameKey(item.subject).replace(/[^a-z0-9]/g, "");
+}
+
+function sectionKey(item: OverlapCandidate): string {
+  return (item.section ?? "").trim().toUpperCase();
+}
+
+function party(item: OverlapCandidate): ImportConflictParty {
+  return {
+    rowNumber: item.rowNumber,
+    cn: item.cn,
+    subject: item.subject,
+    section: item.section,
+    courseCode: item.courseCode,
+    start: item.start,
+    end: item.end,
+    roomCode: item.roomCode,
+  };
+}
+
+function describe(item: OverlapCandidate): string {
+  const section = item.section ? ` ${item.section}` : "";
+  return `${item.start}-${item.end} (CN ${item.cn} ${item.subject}${section} ${item.roomCode})`;
+}
+
+// Classify every pair of one instructor's meetings that overlap on a common day.
+// Overlaps are grouped per class pair so one bad pair is reported once, listing
+// every affected weekday, instead of once per day. Same-subject blocks are
+// merged so a class shared by six sections is one finding, not fifteen pairs.
+// Pure and deterministic: shared by the importer and the repair engine.
+export function classifyOverlaps(items: OverlapCandidate[]): ImportConflict[] {
+  const byFacultyDay = new Map<string, OverlapCandidate[]>();
+  for (const slot of items) {
     if (!slot.facultyName) continue;
     const key = `${nameKey(slot.facultyName)}|${slot.weekday}`;
     const list = byFacultyDay.get(key) ?? [];
@@ -169,30 +312,157 @@ export function detectFacultyConflicts(slots: PlannedSlot[]): ImportConflict[] {
     byFacultyDay.set(key, list);
   }
 
-  const conflicts: ImportConflict[] = [];
+  type Group = { a: OverlapCandidate; b: OverlapCandidate; weekdays: Set<number>; kind: ImportConflictKind };
+  const groups = new Map<string, Group>();
+
   for (const [key, group] of byFacultyDay) {
     const weekday = Number(key.split("|")[1]);
     const ordered = [...group].sort(
-      (a, b) => timeToMinutes(a.start) - timeToMinutes(b.start) || timeToMinutes(a.end) - timeToMinutes(b.end),
+      (a, b) =>
+        timeToMinutes(a.start) - timeToMinutes(b.start) || timeToMinutes(a.end) - timeToMinutes(b.end),
     );
     for (let i = 0; i < ordered.length; i++) {
       for (let j = i + 1; j < ordered.length; j++) {
         const a = ordered[i];
         const b = ordered[j];
+        // Half-open intervals: a class that ends at 16:00 does not overlap one
+        // that starts at 16:00. Only a later start can ever be safe to skip.
         if (timeToMinutes(b.start) >= timeToMinutes(a.end)) break;
-        const day = WEEKDAY_NAMES[weekday] ?? "";
-        conflicts.push({
-          facultyName: a.facultyName ?? "",
-          weekday,
-          sameClassNumber: a.cn === b.cn,
-          a: { rowNumber: a.rowNumber, cn: a.cn, subject: a.subject, courseCode: a.courseCode, start: a.start, end: a.end, roomCode: a.roomCode },
-          b: { rowNumber: b.rowNumber, cn: b.cn, subject: b.subject, courseCode: b.courseCode, start: b.start, end: b.end, roomCode: b.roomCode },
-          message: `${a.facultyName}: ${day} ${a.start}-${a.end} (CN ${a.cn} ${a.subject}) overlaps ${b.start}-${b.end} (CN ${b.cn} ${b.subject}).`,
-        });
+
+        const ka = classKey(a);
+        const kb = classKey(b);
+        const pairKey = ka <= kb ? `${ka}~${kb}` : `${kb}~${ka}`;
+        const existing = groups.get(pairKey);
+        if (existing) {
+          existing.weekdays.add(weekday);
+          continue;
+        }
+        const [first, second] = ka <= kb ? [a, b] : [b, a];
+        const sameSubject = subjectKey(first) === subjectKey(second);
+        // A repeated CN is the same class unless the subject disagrees, in which
+        // case the CN is being reused for two different classes (bad data) and
+        // the pair must stay a conflict.
+        const sameCn = first.cn.trim() === second.cn.trim();
+        const kind: ImportConflictKind =
+          (sameCn && sameSubject) ||
+          (sameSubject && sectionKey(first) === sectionKey(second))
+            ? "DUPLICATE"
+            : sameSubject
+              ? "COMBINED"
+              : "CONFLICT";
+        groups.set(pairKey, { a: first, b: second, weekdays: new Set([weekday]), kind });
       }
     }
   }
-  return conflicts;
+
+  const findings: ImportConflict[] = [];
+  const emit = (
+    kind: ImportConflictKind,
+    facultyName: string,
+    a: OverlapCandidate,
+    b: OverlapCandidate,
+    weekdays: number[],
+    cnList: string[],
+  ) => {
+    const sameClassNumber = a.cn.trim() === b.cn.trim();
+    const sameSubject = subjectKey(a) === subjectKey(b);
+    const sameSection = sectionKey(a) === sectionKey(b);
+    const days = weekdays.map((d) => WEEKDAY_NAMES[d] ?? `Day ${d}`).join(", ");
+    const label =
+      kind === "CONFLICT"
+        ? "Conflict"
+        : kind === "COMBINED"
+          ? "Possible combined class"
+          : "Duplicate record";
+    const body =
+      kind === "COMBINED" && cnList.length > 2
+        ? `${a.start}-${b.end} ${a.subject} is scheduled for ${cnList.length} sections at once (CN ${cnList.join(", ")}).`
+        : `${describe(a)} overlaps ${describe(b)}.`;
+    const recommendation =
+      kind === "CONFLICT"
+        ? "The same instructor cannot teach both classes. Move one class to another day/time or assign another instructor."
+        : kind === "COMBINED"
+          ? "Two or more sections of the same subject meet together — confirm whether this is an intentional combined class before committing."
+          : sameClassNumber
+            ? "Same CN appears twice with overlapping times — keep one meeting (the sheet likely lists alternative rooms/durations for one class)."
+            : "Same subject and section are filed under two CNs with identical times — merge into one class number.";
+    findings.push({
+      kind,
+      blocking: kind === "CONFLICT",
+      facultyName,
+      weekday: weekdays[0],
+      weekdays,
+      sameClassNumber,
+      sameSubject,
+      sameSection,
+      a: party(a),
+      b: party(b),
+      cnList,
+      message: `${label} — ${facultyName}: ${days}. ${body}`,
+      recommendation,
+    });
+  };
+
+  // Different classes meeting at once: one finding per class pair, listing every
+  // affected weekday on a single line. Duplicate records are kept per pair too.
+  // Same-subject blocks are merged so a PATHFIT class shared by six sections is
+  // reported once, not once for every combination of sections.
+  const blocks = new Map<
+    string,
+    { members: Map<string, OverlapCandidate>; weekdays: Set<number> }
+  >();
+
+  for (const g of groups.values()) {
+    const weekdays = Array.from(g.weekdays).sort((x, y) => x - y);
+    if (g.kind !== "COMBINED") {
+      emit(g.kind, g.a.facultyName ?? "", g.a, g.b, weekdays, [g.a.cn, g.b.cn]);
+      continue;
+    }
+    const key = `${nameKey(g.a.facultyName ?? "")}|${subjectKey(g.a)}|${g.a.start}|${weekdays.join(",")}`;
+    const block = blocks.get(key) ?? { members: new Map<string, OverlapCandidate>(), weekdays: new Set<number>() };
+    for (const slot of [g.a, g.b]) if (!block.members.has(classKey(slot))) block.members.set(classKey(slot), slot);
+    weekdays.forEach((d) => block.weekdays.add(d));
+    blocks.set(key, block);
+  }
+
+  for (const block of blocks.values()) {
+    const members = Array.from(block.members.values()).sort((a, b) => a.cn.localeCompare(b.cn));
+    if (members.length < 2) continue;
+    const weekdays = Array.from(block.weekdays).sort((a, b) => a - b);
+    const cnList = Array.from(new Set(members.map((m) => m.cn)));
+    emit("COMBINED", members[0].facultyName ?? "", members[0], members[1], weekdays, cnList);
+  }
+
+  return findings.sort(
+    (x, y) =>
+      nameKey(x.facultyName).localeCompare(nameKey(y.facultyName)) ||
+      x.weekday - y.weekday ||
+      timeToMinutes(x.a.start) - timeToMinutes(y.a.start) ||
+      x.a.cn.localeCompare(y.a.cn) ||
+      x.b.cn.localeCompare(y.b.cn),
+  );
+}
+
+// Genuine instructor double-bookings only (different classes at the same time).
+export function detectFacultyConflicts(slots: PlannedSlot[]): ImportConflict[] {
+  return detectScheduleConflicts(slots).filter((c) => c.kind === "CONFLICT");
+}
+
+export function detectScheduleConflicts(slots: PlannedSlot[]): ImportConflict[] {
+  return classifyOverlaps(
+    slots.map((slot) => ({
+      rowNumber: slot.rowNumber,
+      cn: slot.cn,
+      subject: slot.subject,
+      section: slot.section,
+      courseCode: slot.courseCode,
+      facultyName: slot.facultyName,
+      weekday: slot.weekday,
+      start: slot.start,
+      end: slot.end,
+      roomCode: slot.roomCode,
+    })),
+  );
 }
 
 export type PlanContext = {
@@ -217,7 +487,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const existingByKey = new Map(
     ctx.existingSlots.map((s) => {
       const roomCode = roomById.get(s.roomId)?.code ?? "";
-      return [`${s.cn}|${s.weekday}|${s.startTime}|${s.endTime}|${roomCode}`, s];
+      return [`${s.cn}|${s.weekday}|${s.startTime}|${s.endTime}|${roomCode.toUpperCase()}`, s];
     }),
   );
 
@@ -225,6 +495,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const errors: { row: number; message: string }[] = [];
   const warnings: { row: number; message: string }[] = [];
   const unassigned: { row: number; cn: string; subject: string }[] = [];
+  const incompleteSchedules: IncompleteSchedule[] = [];
   const duplicateFacultyNames: { name: string; similarTo: string; row: number }[] = [];
   const newFacultyNames = new Set<string>();
   const seenSlotKeys = new Set<string>();
@@ -241,6 +512,11 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
       errors: [{ row: 0, message: `Missing required columns: ${missingColumns.join(", ")}` }],
       warnings: [],
       conflicts: [],
+      combinedClasses: [],
+      duplicateSchedules: [],
+      incompleteSchedules: [],
+      tbaClassrooms: [],
+      programMapping: [],
       newFacultyNames: [],
       unassigned: [],
       duplicateFacultyNames: [],
@@ -270,6 +546,15 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
       return;
     }
     if (!schedule) {
+      incompleteSchedules.push({
+        row: rowNumber,
+        cn,
+        subject,
+        section: cell(row["Section"]) || null,
+        courseCode,
+        schedule,
+        message: `CN ${cn}: missing day/time information — record the meeting schedule before importing.`,
+      });
       fail(`CN ${cn}: missing schedule.`);
       return;
     }
@@ -281,6 +566,15 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
 
     const { meetings, errors: parseErrors } = parseScheduleCell(schedule);
     for (const pe of parseErrors) {
+      incompleteSchedules.push({
+        row: rowNumber,
+        cn,
+        subject,
+        section: cell(row["Section"]) || null,
+        courseCode,
+        schedule,
+        message: `CN ${cn}: ${pe.message} (${pe.raw})`,
+      });
       fail(`CN ${cn}: ${pe.message} (${pe.raw})`);
     }
     validBlocks += meetings.length;
@@ -309,7 +603,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
 
     for (const meeting of meetings) {
       for (const weekday of meeting.weekdays) {
-        const key = `${cn}|${weekday}|${meeting.start}|${meeting.end}|${meeting.roomCode}`;
+        const key = `${cn}|${weekday}|${meeting.start}|${meeting.end}|${meeting.roomCode.toUpperCase()}`;
         const messages: string[] = [];
         if (seenSlotKeys.has(key)) {
           warnings.push({
@@ -339,7 +633,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
           units: num(row["Unit"]),
           section: cell(row["Section"]) || null,
           yearLevel: cell(row["Code"]) || null,
-          courseCode: courseCode.toUpperCase(),
+          courseCode: normalizeCourseCode(courseCode),
           instructorRaw,
           facultyName,
           termType: cell(row["Term Type"]) || null,
@@ -358,11 +652,43 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
     }
   });
 
-  const conflicts = detectFacultyConflicts(slots);
+  const findings = detectScheduleConflicts(slots);
+  const conflicts = findings.filter((c) => c.kind === "CONFLICT");
+  const combinedClasses = findings.filter((c) => c.kind === "COMBINED");
+  const duplicateSchedules = findings.filter((c) => c.kind === "DUPLICATE");
+
+  // Classes whose time is known but whose physical room is still TBA. One entry
+  // per class, not per weekday.
+  const tbaByClass = new Map<string, { slot: PlannedSlot; weekdays: Set<number> }>();
+  for (const slot of slots) {
+    if (slot.roomCode.trim().toUpperCase() !== "TBA" && slot.roomType !== "TBA") continue;
+    const key = classKey(slot);
+    const entry = tbaByClass.get(key) ?? { slot, weekdays: new Set<number>() };
+    entry.weekdays.add(slot.weekday);
+    tbaByClass.set(key, entry);
+  }
+  const tbaClassrooms: TbaClassroom[] = Array.from(tbaByClass.values())
+    .map(({ slot, weekdays }) => ({
+      row: slot.rowNumber,
+      cn: slot.cn,
+      subject: slot.subject,
+      section: slot.section,
+      courseCode: slot.courseCode,
+      facultyName: slot.facultyName,
+      weekdays: Array.from(weekdays).sort((a, b) => a - b),
+    }))
+    .sort((a, b) => a.cn.localeCompare(b.cn));
 
   const newSlots = slots.filter((s) => s.status === "new").length;
   const updatedSlots = slots.filter((s) => s.status === "update").length;
   const unchangedSlots = slots.filter((s) => s.status === "unchanged").length;
+
+  const programMapping = buildProgramMapping(rows, slots);
+  const programsMapped = programMapping.filter((p) => p.collegeCode !== null).length;
+  const programsUnassigned = programMapping.filter(
+    (p) => p.collegeCode === null && p.inCatalog,
+  ).length;
+  const programsUnknown = programMapping.filter((p) => !p.inCatalog).length;
 
   return {
     summary: {
@@ -384,17 +710,109 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
       errors: errors.length,
       warnings: warnings.length,
       conflicts: conflicts.length,
+      combinedClasses: combinedClasses.length,
+      duplicateSchedules: duplicateSchedules.length,
+      incompleteSchedules: incompleteSchedules.length,
+      tbaClassrooms: tbaClassrooms.length,
+      programsInFile: programMapping.length,
+      programsMapped,
+      programsUnassigned,
+      programsUnknown,
     },
     targetTerm: target,
     slots,
     errors,
     warnings,
     conflicts,
+    combinedClasses,
+    duplicateSchedules,
+    incompleteSchedules,
+    tbaClassrooms,
+    programMapping,
     newFacultyNames: Array.from(newFacultyNames),
     unassigned,
     duplicateFacultyNames,
     missingColumns,
   };
+}
+
+// Inventory of every program value in the file (including rows that later fail
+// validation, so nothing silently disappears), joined with the catalog so the
+// preview can show matched/unmatched counts before the import is committed.
+function buildProgramMapping(rows: Record<string, unknown>[], slots: PlannedSlot[]): ProgramMapping[] {
+  type Entry = {
+    sourceCodes: Set<string>;
+    rows: number;
+    faculty: Set<string>;
+    firstRow: number;
+  };
+  const entries = new Map<string, Entry>();
+  rows.forEach((row, index) => {
+    const raw = cell(row["Course"]);
+    const code = normalizeCourseCode(raw);
+    if (!code) return;
+    const rowNumber = index + 2;
+    const entry = entries.get(code) ?? {
+      sourceCodes: new Set<string>(),
+      rows: 0,
+      faculty: new Set<string>(),
+      firstRow: rowNumber,
+    };
+    entry.rows++;
+    if (raw) entry.sourceCodes.add(raw);
+    const instructor = normaliseFacultyName(cell(row["Instructor"]));
+    if (instructor && instructor.toUpperCase() !== "TBA") entry.faculty.add(nameKey(instructor));
+    entries.set(code, entry);
+  });
+
+  const slotsByCode = new Map<string, number>();
+  for (const slot of slots) {
+    slotsByCode.set(slot.courseCode, (slotsByCode.get(slot.courseCode) ?? 0) + 1);
+  }
+
+  const catalogOrder = new Map(COLLEGE_DEFS.map((c, index) => [c.code as string, index]));
+
+  return Array.from(entries.entries())
+    .map(([code, entry]): ProgramMapping => {
+      const program = programForCode(code);
+      return {
+        code,
+        sourceCodes: Array.from(entry.sourceCodes).sort(),
+        name: program?.name ?? programNameFor(code),
+        collegeCode: program?.college ?? null,
+        collegeName: program?.college ? collegeNameFor(program.college) : null,
+        official: program?.official ?? false,
+        inCatalog: !!program,
+        rows: entry.rows,
+        slots: slotsByCode.get(code) ?? 0,
+        faculty: entry.faculty.size,
+        firstRow: entry.firstRow,
+      };
+    })
+    .sort(
+      (a, b) =>
+        (a.collegeCode ? catalogOrder.get(a.collegeCode) ?? 999 : 1000) -
+          (b.collegeCode ? catalogOrder.get(b.collegeCode) ?? 999 : 1000) ||
+        a.code.localeCompare(b.code),
+    );
+}
+
+// Whether a row falls inside the selected college/program scope. Programs that
+// are not in the catalog count as unassigned.
+export function slotInScope(courseCode: string, scope?: ImportScope | null): boolean {
+  if (!scope) return true;
+  const key = normalizeCourseCode(courseCode);
+  const program = normalizeCourseCode(scope.program ?? "");
+  if (program) return key === program;
+  const college = (scope.college ?? "").trim();
+  if (!college) return true;
+  if (scope.collegeByCode && Object.prototype.hasOwnProperty.call(scope.collegeByCode, key)) {
+    const assigned = scope.collegeByCode[key];
+    return college === UNASSIGNED_COLLEGE_VALUE ? assigned === null : assigned === college;
+  }
+  const entry = programForCode(courseCode);
+  if (college === UNASSIGNED_COLLEGE_VALUE) return !entry || entry.college === null;
+  return entry?.college === college;
 }
 
 function emptySummary(rowsRead: number, worksheetRows: number): ImportSummary {
@@ -417,17 +835,26 @@ function emptySummary(rowsRead: number, worksheetRows: number): ImportSummary {
     errors: 0,
     warnings: 0,
     conflicts: 0,
+    combinedClasses: 0,
+    duplicateSchedules: 0,
+    incompleteSchedules: 0,
+    tbaClassrooms: 0,
+    programsInFile: 0,
+    programsMapped: 0,
+    programsUnassigned: 0,
+    programsUnknown: 0,
   };
 }
 
 export async function buildPlan(
   buffer: Buffer,
   target?: ImportTargetTerm | null,
+  collegeByCode?: Record<string, string | null>,
 ): Promise<ImportPlan> {
   const { rows, missingColumns, worksheetRows } = readRows(buffer);
 
   const [courses, rooms, faculty, allExistingSlots] = await Promise.all([
-    prisma.course.findMany(),
+    prisma.course.findMany({ select: { id: true, code: true, college: { select: { code: true } } } }),
     prisma.room.findMany(),
     prisma.faculty.findMany(),
     prisma.scheduleSlot.findMany(),
@@ -441,7 +868,7 @@ export async function buildPlan(
       )
     : allExistingSlots;
 
-  return planFromRows(rows, {
+  const plan = planFromRows(rows, {
     courses: courses.map((c) => ({ id: c.id, code: c.code })),
     rooms: rooms.map((r) => ({ id: r.id, code: r.code })),
     faculty: faculty.map((f) => ({ id: f.id, fullName: f.fullName })),
@@ -450,6 +877,25 @@ export async function buildPlan(
     worksheetRows,
     missingColumns,
   });
+
+  // The database copy of the catalog is authoritative: an administrator may
+  // have moved a program to another college after the code was written.
+  const overrides =
+    collegeByCode ??
+    Object.fromEntries(
+      courses.map((c) => [normalizeCourseCode(c.code), c.college?.code ?? null]),
+    );
+  for (const entry of plan.programMapping) {
+    if (!Object.prototype.hasOwnProperty.call(overrides, entry.code)) continue;
+    entry.collegeCode = overrides[entry.code];
+    entry.collegeName = collegeNameFor(overrides[entry.code]);
+  }
+  plan.summary.programsMapped = plan.programMapping.filter((m) => m.collegeCode).length;
+  plan.summary.programsUnassigned = plan.programMapping.filter(
+    (m) => !m.collegeCode,
+  ).length;
+
+  return plan;
 }
 
 export type CommitResult = {
@@ -460,6 +906,7 @@ export type CommitResult = {
   programsCreated: number;
   roomsCreated: number;
   errors: number;
+  skippedOutOfScope: number;
   batchId: number | null;
 };
 
@@ -469,12 +916,13 @@ export async function commitPlan(
   buffer: Buffer,
   target?: ImportTargetTerm | null,
   meta?: ImportBatchMeta,
+  scope?: ImportScope | null,
 ): Promise<{ plan: ImportPlan; result: CommitResult }> {
   const plan = await buildPlan(buffer, target);
   if (plan.missingColumns.length > 0) {
     throw new Error(`Missing required columns: ${plan.missingColumns.join(", ")}`);
   }
-  const result = await writePlan(plan, target, meta);
+  const result = await writePlan(plan, target, meta, scope);
   return { plan, result };
 }
 
@@ -484,10 +932,15 @@ export async function writePlan(
   plan: ImportPlan,
   target?: ImportTargetTerm | null,
   meta?: ImportBatchMeta,
+  scope?: ImportScope | null,
 ): Promise<CommitResult> {
   if (plan.missingColumns.length > 0) {
     throw new Error(`Missing required columns: ${plan.missingColumns.join(", ")}`);
   }
+
+  // The plan is always validated over the whole file; the scope only narrows
+  // what is written. This keeps cross-department instructor checks intact.
+  const slotsToWrite = scope ? plan.slots.filter((s) => slotInScope(s.courseCode, scope)) : plan.slots;
 
   const result: CommitResult = {
     created: 0,
@@ -497,53 +950,80 @@ export async function writePlan(
     programsCreated: 0,
     roomsCreated: 0,
     errors: plan.errors.length,
+    skippedOutOfScope: plan.slots.length - slotsToWrite.length,
     batchId: null,
   };
 
   // Only bother tracking a batch when a target term is known and the file will
   // actually create or update at least one slot. Unchanged/error rows keep
   // whatever batch they already belonged to.
-  const willWrite = plan.slots.some((s) => s.status === "new" || s.status === "update");
+  const willWrite = slotsToWrite.some((s) => s.status === "new" || s.status === "update");
 
-  await prisma.$transaction(async (tx) => {
-    // Import batch — lets a single upload be identified and cleared later,
-    // without touching manually created or previously imported schedules.
-    let batchId: number | null = null;
-    if (target && willWrite) {
-      const batch = await tx.importBatch.create({
-        data: {
-          filename: meta?.filename?.trim() || "schedule.xlsx",
-          schoolYear: target.schoolYear,
-          semester: target.semester,
-          importedById: meta?.importedById ?? null,
-        },
-      });
-      batchId = batch.id;
-    }
+  await prisma.$transaction(
+    async (tx) => {
+      // Import batch — lets a single upload be identified and cleared later,
+      // without touching manually created or previously imported schedules.
+      let batchId: number | null = null;
+      if (target && willWrite) {
+        const batch = await tx.importBatch.create({
+          data: {
+            filename: meta?.filename?.trim() || "schedule.xlsx",
+            schoolYear: target.schoolYear,
+            semester: target.semester,
+            importedById: meta?.importedById ?? null,
+          },
+        });
+        batchId = batch.id;
+      }
 
-    // Programs
-    const courseCodes = Array.from(new Set(plan.slots.map((s) => s.courseCode)));
+    // Programs. New programs get their official name and college from the
+    // catalog; existing rows are only filled in where they are still blank, so
+    // an administrator's assignment is never overwritten.
+    const courseCodes = Array.from(new Set(slotsToWrite.map((s) => s.courseCode)));
+    const mappingByCode = new Map(plan.programMapping.map((m) => [m.code, m]));
     const courseMap = new Map<string, number>();
     for (const code of courseCodes) {
+      const program = programForCode(code);
+      const mapping = mappingByCode.get(code);
+      const name = program?.name ?? programNameFor(code);
+      const sourceCode = mapping?.sourceCodes[0] ?? code;
+      const college = program?.college
+        ? await tx.college.findUnique({ where: { code: program.college }, select: { id: true } })
+        : null;
       const existing = await tx.course.findUnique({ where: { code } });
       if (existing) {
+        const data: { name?: string; collegeId?: number; sourceCode?: string } = {};
+        if (!existing.name && name) data.name = name;
+        if (existing.collegeId == null && college) data.collegeId = college.id;
+        if (!existing.sourceCode) data.sourceCode = sourceCode;
+        if (Object.keys(data).length > 0) {
+          await tx.course.update({ where: { id: existing.id }, data });
+        }
         courseMap.set(code, existing.id);
       } else {
-        const created = await tx.course.create({ data: { code } });
+        const created = await tx.course.create({
+          data: {
+            code,
+            name,
+            collegeId: college?.id ?? null,
+            sourceCode,
+            official: program?.official ?? true,
+          },
+        });
         courseMap.set(code, created.id);
         result.programsCreated++;
       }
     }
 
     // Rooms
-    const roomCodes = Array.from(new Set(plan.slots.map((s) => s.roomCode.toUpperCase())));
+    const roomCodes = Array.from(new Set(slotsToWrite.map((s) => s.roomCode.toUpperCase())));
     const roomMap = new Map<string, number>();
     for (const code of roomCodes) {
       const existing = await tx.room.findUnique({ where: { code } });
       if (existing) {
         roomMap.set(code, existing.id);
       } else {
-        const type = plan.slots.find((s) => s.roomCode.toUpperCase() === code)?.roomType ?? "PHYSICAL";
+        const type = slotsToWrite.find((s) => s.roomCode.toUpperCase() === code)?.roomType ?? "PHYSICAL";
         const created = await tx.room.create({ data: { code, type } });
         roomMap.set(code, created.id);
         result.roomsCreated++;
@@ -552,7 +1032,7 @@ export async function writePlan(
 
     // Faculty
     const facultyNames = Array.from(
-      new Set(plan.slots.map((s) => s.facultyName).filter((n): n is string => !!n)),
+      new Set(slotsToWrite.map((s) => s.facultyName).filter((n): n is string => !!n)),
     );
     const facultyMap = new Map<string, number>();
     for (const name of facultyNames) {
@@ -568,22 +1048,32 @@ export async function writePlan(
       }
     }
 
-    // Slots
-    for (const slot of plan.slots) {
+    // Slots. Every slot in the file is matched against the term's existing
+    // rows in one query, then the loop only touches local state — a large
+    // consolidated workbook (thousands of meetings) no longer times out.
+    const slotKey = (cn: string, weekday: number, start: string, end: string, roomId: number) =>
+      `${cn}\u0000${weekday}\u0000${start}\u0000${end}\u0000${roomId}`;
+    const existingSlots = await tx.scheduleSlot.findMany({
+      where: target
+        ? { schoolYear: target.schoolYear, semester: target.semester }
+        : undefined,
+      select: { id: true, cn: true, weekday: true, startTime: true, endTime: true, roomId: true },
+    });
+    const existingByKey = new Map<string, number>();
+    for (const row of existingSlots) {
+      existingByKey.set(
+        slotKey(row.cn, row.weekday, row.startTime, row.endTime, row.roomId),
+        row.id,
+      );
+    }
+
+    for (const slot of slotsToWrite) {
       const courseId = courseMap.get(slot.courseCode)!;
       const roomId = roomMap.get(slot.roomCode.toUpperCase())!;
       const facultyId = slot.facultyName ? facultyMap.get(nameKey(slot.facultyName)) ?? null : null;
 
-      const existing = await tx.scheduleSlot.findFirst({
-        where: {
-          cn: slot.cn,
-          weekday: slot.weekday,
-          startTime: slot.start,
-          endTime: slot.end,
-          roomId,
-          ...(target ? { schoolYear: target.schoolYear, semester: target.semester } : {}),
-        },
-      });
+      const key = slotKey(slot.cn, slot.weekday, slot.start, slot.end, roomId);
+      const existingId = existingByKey.get(key);
       const data = {
         cn: slot.cn,
         subject: slot.subject,
@@ -604,15 +1094,16 @@ export async function writePlan(
         importBatchId: batchId,
       };
 
-      if (existing) {
+      if (existingId !== undefined) {
         if (slot.status === "unchanged") {
           result.unchanged++;
         } else {
-          await tx.scheduleSlot.update({ where: { id: existing.id }, data });
+          await tx.scheduleSlot.update({ where: { id: existingId }, data });
           result.updated++;
         }
       } else {
-        await tx.scheduleSlot.create({ data });
+        const created = await tx.scheduleSlot.create({ data, select: { id: true } });
+        existingByKey.set(key, created.id);
         result.created++;
       }
     }
@@ -624,7 +1115,10 @@ export async function writePlan(
       });
       result.batchId = batchId;
     }
-  });
+    },
+    { maxWait: 15000, timeout: 180000 },
+  );
 
   return result;
 }
+

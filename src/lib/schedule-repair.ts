@@ -1,4 +1,4 @@
-// Deterministic schedule repair engine.
+﻿// Deterministic schedule repair engine.
 //
 // This module is pure: it reads worksheet rows and returns structured findings.
 // It never touches the database and never calls an LLM. The same input always
@@ -14,6 +14,7 @@ import {
   type ParseError,
 } from "@/lib/schedule-parser";
 import { hoursOfRange, timeToMinutes, WEEKDAY_NAMES } from "@/lib/dates";
+import { classifyOverlaps } from "@/lib/import";
 
 // ---------------------------------------------------------------------------
 // Issue catalogue
@@ -43,6 +44,7 @@ export const ISSUE_LABELS: Record<string, string> = {
   DUP_EXACT: "Exact duplicate row",
   DUP_POSSIBLE: "Possible duplicate row",
   CONFLICT_OVERLAP: "Overlapping instructor meetings",
+  COMBINED_SECTIONS: "Same subject taught to several sections",
   HOURS_MISMATCH: "Scheduled vs sheet hours mismatch",
   SLOTS_OVERCAPACITY: "Enrolment over capacity",
 };
@@ -65,11 +67,15 @@ export type RepairFinding = {
 };
 
 export type RepairConflict = {
+  kind: "CONFLICT" | "COMBINED";
   facultyName: string;
   weekday: number;
+  weekdays: number[];
+  cnList: string[];
   sameClassNumber: boolean;
-  a: { rowNumber: number; cn: string; subject: string; start: string; end: string; roomCode: string };
-  b: { rowNumber: number; cn: string; subject: string; start: string; end: string; roomCode: string };
+  sameSubject: boolean;
+  a: { rowNumber: number; cn: string; subject: string; section: string | null; start: string; end: string; roomCode: string };
+  b: { rowNumber: number; cn: string; subject: string; section: string | null; start: string; end: string; roomCode: string };
   message: string;
 };
 
@@ -509,6 +515,7 @@ const SEVERITY_MAP: Record<IssueCode, RepairSeverity> = {
   DUP_EXACT: "review",
   DUP_POSSIBLE: "review",
   CONFLICT_OVERLAP: "review",
+  COMBINED_SECTIONS: "review",
   HOURS_MISMATCH: "review",
   // Cosmetic / informational; usually auto-fixable and non-blocking.
   WS_WHITESPACE: "info",
@@ -620,49 +627,65 @@ function findDuplicates(
 // Conflict detection
 // ---------------------------------------------------------------------------
 
+// Overlaps are classified by the same pure function the importer uses, so the
+// repair page and the import preview can never disagree: same class / same
+// subject+section = duplicate record (not a clash), same subject taught to
+// several sections = possible combined class, anything else = a real clash.
 export function detectConflicts(repaired: RepairedRow[]): RepairConflict[] {
-  const byFacultyDay = new Map<string, { row: RepairedRow; meeting: ResolvedMeeting }[]>();
+  const candidates = [];
   for (const row of repaired) {
     if (row.facultyMatch === "unassigned") continue;
-    const name = row.instructorNormalized.toLowerCase();
+    const facultyName = row.instructorNormalized || null;
+    if (!facultyName) continue;
+    const section = row.section;
     for (const meeting of row.meetings) {
       for (const weekday of meeting.weekdays) {
-        const key = `${name}|${weekday}`;
-        const list = byFacultyDay.get(key) ?? [];
-        list.push({ row, meeting });
-        byFacultyDay.set(key, list);
-      }
-    }
-  }
-
-  const conflicts: RepairConflict[] = [];
-  for (const [key, group] of byFacultyDay) {
-    const weekday = Number(key.split("|")[1]);
-    const ordered = [...group].sort(
-      (a, b) => timeToMinutes(a.meeting.start) - timeToMinutes(b.meeting.start) || a.row.rowNumber - b.row.rowNumber,
-    );
-    for (let i = 0; i < ordered.length; i++) {
-      for (let j = i + 1; j < ordered.length; j++) {
-        const A = ordered[i];
-        const B = ordered[j];
-        if (timeToMinutes(B.meeting.start) >= timeToMinutes(A.meeting.end)) break;
-        // Two different rows that share a class number are the same class listed
-        // twice (handled by duplicate detection), not an instructor clash. A lab
-        // and lecture on the same row is still a genuine overlap and is reported.
-        if (A.row.rowNumber !== B.row.rowNumber && A.row.cn && A.row.cn === B.row.cn) continue;
-        const day = WEEKDAY_NAMES[weekday] ?? "";
-        conflicts.push({
-          facultyName: A.row.instructorNormalized,
+        candidates.push({
+          rowNumber: row.rowNumber,
+          cn: row.cn,
+          subject: row.subject,
+          section,
+          courseCode: row.courseCode,
+          facultyName,
           weekday,
-          sameClassNumber: A.row.cn === B.row.cn,
-          a: { rowNumber: A.row.rowNumber, cn: A.row.cn, subject: A.row.subject, start: A.meeting.start, end: A.meeting.end, roomCode: A.meeting.roomCode },
-          b: { rowNumber: B.row.rowNumber, cn: B.row.cn, subject: B.row.subject, start: B.meeting.start, end: B.meeting.end, roomCode: B.meeting.roomCode },
-          message: `${A.row.instructorNormalized}: ${day} ${A.meeting.start}-${A.meeting.end} (row ${A.row.rowNumber}, CN ${A.row.cn}) overlaps ${B.meeting.start}-${B.meeting.end} (row ${B.row.rowNumber}, CN ${B.row.cn}).`,
+          start: meeting.start,
+          end: meeting.end,
+          roomCode: meeting.roomCode,
         });
       }
     }
   }
-  return conflicts;
+
+  return classifyOverlaps(candidates)
+    .filter((c): c is typeof c & { kind: "CONFLICT" | "COMBINED" } => c.kind !== "DUPLICATE")
+    .map((c) => ({
+      kind: c.kind,
+      facultyName: c.facultyName,
+      weekday: c.weekday,
+      weekdays: c.weekdays,
+      cnList: c.cnList,
+      sameClassNumber: c.sameClassNumber,
+      sameSubject: c.sameSubject,
+      a: {
+        rowNumber: c.a.rowNumber,
+        cn: c.a.cn,
+        subject: c.a.subject,
+        section: c.a.section,
+        start: c.a.start,
+        end: c.a.end,
+        roomCode: c.a.roomCode,
+      },
+      b: {
+        rowNumber: c.b.rowNumber,
+        cn: c.b.cn,
+        subject: c.b.subject,
+        section: c.b.section,
+        start: c.b.start,
+        end: c.b.end,
+        roomCode: c.b.roomCode,
+      },
+      message: c.message,
+    }));
 }
 
 // ---------------------------------------------------------------------------
@@ -802,17 +825,18 @@ export function analyzeWorkbook(rows: WorkRow[], ctx: RepairContext): RepairRepo
 
   const conflicts = detectConflicts(repaired);
   for (const c of conflicts) {
+    const days = c.weekdays.map((d) => WEEKDAY_NAMES[d] ?? `Day ${d}`).join(", ");
     const finding: RepairFinding = {
-      code: "CONFLICT_OVERLAP",
+      code: c.kind === "COMBINED" ? "COMBINED_SECTIONS" : "CONFLICT_OVERLAP",
       severity: "review",
       certainty: "certain",
       rowNumber: c.b.rowNumber,
       cn: c.b.cn,
       field: "Schedule",
-      original: `${WEEKDAY_NAMES[c.weekday]} ${c.a.start}-${c.a.end}`,
+      original: `${days} ${c.a.start}-${c.a.end}`,
       proposed: null,
       explanation: c.message,
-      evidence: `CN ${c.a.cn} vs CN ${c.b.cn}, ${WEEKDAY_NAMES[c.weekday]}`,
+      evidence: `CN ${c.cnList.join(" vs CN ")}, ${days}`,
       autoFixable: false,
       requiresApproval: true,
     };
@@ -1044,3 +1068,5 @@ export function findingsByCategory(report: RepairReport) {
     info: bySeverity("info"),
   };
 }
+
+

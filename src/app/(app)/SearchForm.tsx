@@ -25,7 +25,7 @@ export function SearchForm({
       {Object.entries(hidden).map(([key, value]) =>
         value ? <input key={key} type="hidden" name={key} value={value} /> : null,
       )}
-      <div className="relative">
+      <div className="relative min-w-0 flex-1">
         <svg
           aria-hidden="true"
           viewBox="0 0 20 20"

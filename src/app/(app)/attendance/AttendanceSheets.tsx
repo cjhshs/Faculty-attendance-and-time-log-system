@@ -1,10 +1,15 @@
 import { Fragment } from "react";
 import { buildProgramSheet, paginateColumns, type SheetSlot } from "@/lib/attendance-sheet";
-import { formatLong, formatTime12 } from "@/lib/dates";
+import { formatLong } from "@/lib/dates";
 import logo1 from "@/app/logo/logo1.png";
 import logo2 from "@/app/logo/logo2.png";
 
-export type SheetCourse = { id: number; code: string; name: string | null };
+export type SheetCourse = {
+  id: number;
+  code: string;
+  name: string | null;
+  collegeName?: string | null;
+};
 export type SheetHeaderData = {
   schoolHeader: string;
   collegeHeader: string;
@@ -194,6 +199,9 @@ function SheetHead({
       <div className="mt-1 flex flex-wrap items-center justify-between text-[11px]">
         <span>
           <strong>DATE:</strong> {formatLong(date)}
+        </span>
+        <span>
+          <strong>COLLEGE:</strong> {course.collegeName ?? "UNASSIGNED"}
         </span>
         <span>
           <strong>PROGRAM:</strong> {course.code}

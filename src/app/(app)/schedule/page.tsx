@@ -5,7 +5,13 @@ import { prisma } from "@/lib/prisma";
 import { getCourses, getFaculty, getRooms } from "@/lib/data";
 import { WEEKDAY_NAMES } from "@/lib/dates";
 import { getActiveTerm, listTerms, normalizeSemester, parseTerm, termWhere } from "@/lib/terms";
+import {
+  getCollegeOptions,
+  normalizeScopeSelection,
+  slotScopeWhere,
+} from "@/lib/colleges";
 import { ScrollArea } from "../ScrollArea";
+import { CollegeCourseFilter } from "../CollegeCourseFilter";
 import { ScheduleTable, type ScheduleRowData } from "./ScheduleTable";
 import { TermTools } from "./TermTools";
 import { ClearSchedules } from "./ClearSchedules";
@@ -17,6 +23,7 @@ export default async function SchedulePage({
 }: {
   searchParams: Promise<{
     program?: string;
+    college?: string;
     day?: string;
     q?: string;
     page?: string;
@@ -28,16 +35,21 @@ export default async function SchedulePage({
   const canEdit = hasPermission(user, PERMISSIONS.SCHEDULE_EDIT);
   const canImport = hasPermission(user, PERMISSIONS.SCHEDULE_IMPORT);
   const params = await searchParams;
-  const [courses, facultyList, rooms, activeTerm, terms] = await Promise.all([
+  const [courses, facultyList, rooms, activeTerm, terms, collegeOptions] = await Promise.all([
     getCourses(),
     getFaculty(),
     getRooms(),
     getActiveTerm(),
     listTerms(),
+    getCollegeOptions(),
   ]);
 
   const q = (params.q ?? "").trim();
   const page = Math.max(1, Number(params.page) || 1);
+  const scope = normalizeScopeSelection(collegeOptions, {
+    college: params.college,
+    program: params.program,
+  });
 
   const years = Array.from(new Set(terms.map((t) => t.schoolYear)));
   const selectedYear = params.year ?? activeTerm.schoolYear;
@@ -46,7 +58,7 @@ export default async function SchedulePage({
 
   const filters: Record<string, unknown>[] = [];
   if (selectedTerm) filters.push(termWhere(selectedTerm));
-  if (params.program) filters.push({ course: { code: params.program } });
+  filters.push(slotScopeWhere(scope));
   if (params.day !== undefined && params.day !== "") filters.push({ weekday: Number(params.day) });
   if (q) {
     filters.push({
@@ -128,7 +140,8 @@ export default async function SchedulePage({
   const baseQuery = new URLSearchParams();
   if (params.year) baseQuery.set("year", params.year);
   if (params.sem) baseQuery.set("sem", params.sem);
-  if (params.program) baseQuery.set("program", params.program);
+  if (scope.college) baseQuery.set("college", scope.college);
+  if (scope.program) baseQuery.set("program", scope.program);
   if (params.day !== undefined && params.day !== "") baseQuery.set("day", params.day);
   if (q) baseQuery.set("q", q);
   const pageHref = (target: number) => {
@@ -143,6 +156,32 @@ export default async function SchedulePage({
         selectedTerm.schoolYear,
       )}&semester=${encodeURIComponent(selectedTerm.semester)}`
     : "/schedule/import";
+
+  const activeCollege = scope.college
+    ? collegeOptions.colleges.find((c) => c.code === scope.college) ?? null
+    : null;
+  const activeProgram = scope.program
+    ? collegeOptions.all.find((p) => p.code === scope.program) ?? null
+    : null;
+  const scopeLabel = scope.program
+    ? `${scope.program}${activeProgram?.name ? ` — ${activeProgram.name}` : ""}`
+    : scope.college === "unassigned"
+      ? `Unassigned programs (${collegeOptions.unassigned.length})`
+      : activeCollege
+        ? `${activeCollege.code} — ${activeCollege.name} (${activeCollege.programs.length} program${
+            activeCollege.programs.length === 1 ? "" : "s"
+          })`
+        : `All colleges (${collegeOptions.all.length} programs)`;
+  const hasScope = Boolean(scope.college || scope.program);
+  const clearHref = (() => {
+    const next = new URLSearchParams();
+    if (params.year) next.set("year", params.year);
+    if (params.sem) next.set("sem", params.sem);
+    if (params.day !== undefined && params.day !== "") next.set("day", params.day);
+    if (q) next.set("q", q);
+    const s = next.toString();
+    return s ? `/schedule?${s}` : "/schedule";
+  })();
 
   return (
     <div className="space-y-4">
@@ -192,19 +231,13 @@ export default async function SchedulePage({
             <option value="all">All semesters</option>
           </select>
         </div>
-        <div>
-          <label className="label" htmlFor="program">
-            Program
-          </label>
-          <select id="program" name="program" defaultValue={params.program ?? ""} className="input">
-            <option value="">All programs</option>
-            {courses.map((c) => (
-              <option key={c.id} value={c.code}>
-                {c.code}
-              </option>
-            ))}
-          </select>
-        </div>
+        <CollegeCourseFilter
+          colleges={collegeOptions.colleges}
+          unassigned={collegeOptions.unassigned}
+          college={scope.college ?? ""}
+          program={scope.program ?? ""}
+          idPrefix="schedule"
+        />
         <div>
           <label className="label" htmlFor="day">
             Day
@@ -236,6 +269,15 @@ export default async function SchedulePage({
         </button>
       </form>
 
+      <p className="text-xs text-muted">
+        Scope: <strong>{scopeLabel}</strong> · {total} matching slot{total === 1 ? "" : "s"}.
+        {hasScope ? (
+          <Link className="ml-2 underline" href={clearHref}>
+            Clear filters
+          </Link>
+        ) : null}
+      </p>
+
       <ScrollArea className="card">
         <ScheduleTable
           rows={rows}
@@ -244,7 +286,7 @@ export default async function SchedulePage({
           courses={courseOptions}
           canEdit={canEdit}
           emptyMessage={
-            q || params.program || params.day
+            q || hasScope || params.day
               ? "No schedule slots match your filters."
               : selectedTerm
                 ? `No schedules for ${selectedTerm.schoolYear} ${selectedTerm.semester}. Import a schedule first.`

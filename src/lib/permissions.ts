@@ -18,6 +18,8 @@ export const PERMISSIONS = {
   SUMMARY_EXPORT: "summary.export",
   // Settings
   SETTINGS_MANAGE: "settings.manage",
+  // System reset (admin only)
+  SYSTEM_RESET: "system.reset",
   // Users
   USERS_VIEW: "users.view",
   USERS_MANAGE: "users.manage",
@@ -42,6 +44,7 @@ export const ALL_PERMISSIONS: { name: PermissionKey; description: string }[] = [
   { name: PERMISSIONS.SUMMARY_PRINT, description: "Print attendance summary" },
   { name: PERMISSIONS.SUMMARY_EXPORT, description: "Export summary to Excel" },
   { name: PERMISSIONS.SETTINGS_MANAGE, description: "Edit header, logos and signatory names" },
+  { name: PERMISSIONS.SYSTEM_RESET, description: "Back up and reset operational data" },
   { name: PERMISSIONS.USERS_VIEW, description: "View users" },
   { name: PERMISSIONS.USERS_MANAGE, description: "Create/edit users and assign roles" },
   { name: PERMISSIONS.ROLES_MANAGE, description: "Manage roles and permissions" },

@@ -45,7 +45,7 @@ export default async function AuditPage({
         name="action"
         defaultValue={params.action ?? ""}
         placeholder="Search action..."
-        className="card max-w-xl"
+        className="card"
       />
 
       <ScrollArea className="card">

@@ -16,6 +16,8 @@ export function ImportClient({
   const [file, setFile] = useState<File | null>(null);
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear);
   const [semester, setSemester] = useState(defaultSemester);
+  const [scopeCollege, setScopeCollege] = useState("");
+  const [scopeProgram, setScopeProgram] = useState("");
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [result, setResult] = useState<CommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +28,8 @@ export function ImportClient({
     if (file) body.append("file", file);
     body.append("schoolYear", schoolYear);
     body.append("semester", semester);
+    if (scopeCollege) body.append("college", scopeCollege);
+    if (scopeProgram) body.append("program", scopeProgram);
     return body;
   }
 
@@ -39,6 +43,8 @@ export function ImportClient({
     setError(null);
     setResult(null);
     setPlan(null);
+    setScopeCollege("");
+    setScopeProgram("");
     try {
       const res = await fetch("/api/schedule/preview", { method: "POST", body: buildBody() });
       const data = await res.json();
@@ -54,9 +60,10 @@ export function ImportClient({
   async function commit() {
     if (!file) return;
     const termLabel = `${schoolYear.trim()} ${semester}`;
+    const scopeLabel = scopeProgram || scopeCollege || "all colleges";
     if (
       !window.confirm(
-        `Import this file into ${termLabel}? Existing schedules in that semester are updated, never deleted. Attendance is not affected.`,
+        `Import ${scopeLabel} from this file into ${termLabel}? Existing schedules in that semester are updated, never deleted. Attendance is not affected. Conflicts are always checked across every department in the file.`,
       )
     )
       return;
@@ -173,13 +180,28 @@ export function ImportClient({
           Import complete into {schoolYear.trim()} {semester}: {result.created} added,{" "}
           {result.updated} updated, {result.unchanged} unchanged. {result.facultyCreated} new
           faculty, {result.programsCreated} new program(s), {result.roomsCreated} new room(s).
+          {result.skippedOutOfScope > 0
+            ? ` ${result.skippedOutOfScope} slot(s) left untouched because they are outside the selected college/course.`
+            : ""}
           {result.batchId ? ` Recorded as import batch #${result.batchId}.` : ""}
           {result.errors > 0 ? ` ${result.errors} row(s) were skipped.` : ""}
         </div>
       ) : null}
 
       {plan ? (
-        <PlanView plan={plan} onConfirm={commit} loading={loading} onDownloadErrors={downloadErrors} />
+        <PlanView
+          plan={plan}
+          onConfirm={commit}
+          loading={loading}
+          onDownloadErrors={downloadErrors}
+          scopeCollege={scopeCollege}
+          scopeProgram={scopeProgram}
+          onCollegeChange={(value) => {
+            setScopeCollege(value);
+            setScopeProgram("");
+          }}
+          onProgramChange={setScopeProgram}
+        />
       ) : null}
     </div>
   );
@@ -190,13 +212,59 @@ function PlanView({
   onConfirm,
   loading,
   onDownloadErrors,
+  scopeCollege,
+  scopeProgram,
+  onCollegeChange,
+  onProgramChange,
 }: {
   plan: ImportPlan;
   onConfirm: () => void;
   loading: boolean;
   onDownloadErrors: () => void;
+  scopeCollege: string;
+  scopeProgram: string;
+  onCollegeChange: (value: string) => void;
+  onProgramChange: (value: string) => void;
 }) {
   const s = plan.summary;
+  const collegeNames = new Map<string, string>();
+  for (const m of plan.programMapping) {
+    if (m.collegeCode && m.collegeName) collegeNames.set(m.collegeCode, m.collegeName);
+  }
+  const collegeCodes = Array.from(collegeNames.keys());
+  const hasUnassigned = plan.programMapping.some((m) => !m.collegeCode);
+
+  const inScope = (m: { collegeCode: string | null; code: string }) =>
+    scopeProgram
+      ? m.code === scopeProgram
+      : scopeCollege
+        ? scopeCollege === "unassigned"
+          ? !m.collegeCode
+          : m.collegeCode === scopeCollege
+        : true;
+  const scopeMapping = plan.programMapping.filter(inScope);
+  const scopeCodes = new Set(scopeMapping.map((m) => m.code));
+  const scopeSlots = plan.slots.filter((slot) => scopeCodes.has(slot.courseCode));
+  const scopeChanges = scopeSlots.filter(
+    (slot) => slot.status === "new" || slot.status === "update",
+  ).length;
+  const scopeRows = scopeMapping.reduce((n, m) => n + m.rows, 0);
+  const scopeLabel = scopeProgram
+    ? scopeProgram
+    : scopeCollege === "unassigned"
+      ? "Unassigned programs"
+      : scopeCollege
+        ? `${scopeCollege} — ${collegeNames.get(scopeCollege) ?? ""}`
+        : "All colleges";
+
+  const programOptions = plan.programMapping.filter((m) =>
+    scopeCollege
+      ? scopeCollege === "unassigned"
+        ? !m.collegeCode
+        : m.collegeCode === scopeCollege
+      : true,
+  );
+
   return (
     <div className="space-y-4">
       {plan.targetTerm ? (
@@ -207,6 +275,72 @@ function PlanView({
           </strong>
         </p>
       ) : null}
+
+      <div className="card space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-navy">Import scope</h3>
+          <p className="text-xs text-muted">
+            Only the selected college or course is written. The whole file is always validated, so
+            instructor conflicts between departments are still reported.
+          </p>
+        </div>
+        <div className="flex flex-wrap items-end gap-4">
+          <div>
+            <label className="label" htmlFor="import-college">
+              College / Department
+            </label>
+            <select
+              id="import-college"
+              className="input"
+              value={scopeCollege}
+              onChange={(e) => onCollegeChange(e.target.value)}
+            >
+              <option value="">
+                All colleges ({plan.programMapping.length} program
+                {plan.programMapping.length === 1 ? "" : "s"})
+              </option>
+              {collegeCodes.map((code) => (
+                <option key={code} value={code}>
+                  {code} — {collegeNames.get(code)} (
+                  {plan.programMapping.filter((m) => m.collegeCode === code).length})
+                </option>
+              ))}
+              {hasUnassigned ? (
+                <option value="unassigned">
+                  Unassigned programs (
+                  {plan.programMapping.filter((m) => !m.collegeCode).length})
+                </option>
+              ) : null}
+            </select>
+          </div>
+          <div>
+            <label className="label" htmlFor="import-scope-program">
+              Course / Program
+            </label>
+            <select
+              id="import-scope-program"
+              className="input"
+              value={scopeProgram}
+              onChange={(e) => onProgramChange(e.target.value)}
+            >
+              <option value="">All programs in scope</option>
+              {programOptions.map((m) => (
+                <option key={m.code} value={m.code}>
+                  {m.code} — {m.name ?? "unnamed"} ({m.slots} slot
+                  {m.slots === 1 ? "" : "s"})
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="text-xs">
+          <strong>Scope:</strong> {scopeLabel} · {scopeMapping.length} program
+          {scopeMapping.length === 1 ? "" : "s"} · {scopeRows} source row
+          {scopeRows === 1 ? "" : "s"} · {scopeSlots.length} slot
+          {scopeSlots.length === 1 ? "" : "s"} ·{" "}
+          <strong>{scopeChanges} change{scopeChanges === 1 ? "" : "s"} to write</strong>
+        </p>
+      </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
         <Stat label="Rows read" value={s.dataRows} />
@@ -219,18 +353,98 @@ function PlanView({
         <Stat label="Errors" value={s.errorRows} tone={s.errorRows ? "red" : undefined} />
       </div>
 
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Conflicts" value={s.conflicts} tone={s.conflicts ? "red" : undefined} />
+        <Stat label="Combined" value={s.combinedClasses} />
+        <Stat label="Duplicate records" value={s.duplicateSchedules} />
+        <Stat label="No room yet (TBA)" value={s.tbaClassrooms} />
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <Stat label="Programs in file" value={s.programsInFile} />
+        <Stat label="Mapped to a college" value={s.programsMapped} tone="green" />
+        <Stat
+          label="Unassigned"
+          value={s.programsUnassigned}
+          tone={s.programsUnassigned ? "red" : undefined}
+        />
+        <Stat
+          label="Unknown codes"
+          value={s.programsUnknown}
+          tone={s.programsUnknown ? "red" : undefined}
+        />
+      </div>
+
       <p className="text-xs text-muted">
         Reconciliation — worksheet rows: {s.worksheetRows} · data rows: {s.dataRows} · parsed
         without error: {s.parsedRows} · error rows: {s.errorRows} · warning rows: {s.warningRows} ·
         meeting entries: {s.meetingEntries} · valid meeting blocks: {s.validBlocks} · faculty
-        conflicts: {s.conflicts}
+        conflicts: {s.conflicts} · possible combined classes: {s.combinedClasses} · duplicate
+        records: {s.duplicateSchedules} · incomplete schedules: {s.incompleteSchedules} · programs:{" "}
+        {s.programsInFile}
       </p>
 
+      <Section title={`Program mapping (${plan.programMapping.length})`}>
+        <p className="mb-2 text-xs text-muted">
+          Every course code in the file is listed. Unassigned programs are imported but wait for an
+          administrator to choose a college on the Master Data page.
+        </p>
+        <div className="max-h-80 overflow-auto">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th scope="col">Course code</th>
+                <th scope="col">Program name</th>
+                <th scope="col">College</th>
+                <th scope="col">Rows</th>
+                <th scope="col">Slots</th>
+                <th scope="col">Status</th>
+                <th scope="col">Action</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plan.programMapping.map((m) => (
+                <tr key={m.code}>
+                  <td className="font-medium">{m.code}</td>
+                  <td>{m.name ?? <span className="text-muted">Not in the official catalog</span>}</td>
+                  <td>{m.collegeCode ? `${m.collegeCode} — ${m.collegeName}` : "Unassigned"}</td>
+                  <td className="text-center">{m.rows}</td>
+                  <td className="text-center">{m.slots}</td>
+                  <td>
+                    {!m.inCatalog ? (
+                      <span className="badge bg-red-100 text-red-800">Unknown code</span>
+                    ) : m.collegeCode === null ? (
+                      <span className="badge bg-amber-100 text-amber-800">Needs review</span>
+                    ) : m.official ? (
+                      <span className="badge bg-green-100 text-green-800">Official</span>
+                    ) : (
+                      <span className="badge bg-blue-100 text-blue-800">Additional program</span>
+                    )}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="text-xs underline"
+                      onClick={() => {
+                        onCollegeChange(m.collegeCode ?? "");
+                        onProgramChange(m.code);
+                      }}
+                    >
+                      Import only this
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Section>
+
       {plan.conflicts.length ? (
-        <Section title={`Schedule conflicts (${plan.conflicts.length})`} tone="red">
+        <Section title={`Confirmed instructor conflicts (${plan.conflicts.length})`} tone="red">
           <p className="mb-2 text-xs text-muted">
-            The same instructor is booked in two places at once. Nothing was auto-resolved — review
-            these before committing.
+            The same instructor is booked for two different classes at the same time. Nothing was
+            auto-resolved — fix these before committing, or change the schedule after importing.
           </p>
           <ul className="space-y-1">
             {plan.conflicts.slice(0, 200).map((c, i) => (
@@ -242,6 +456,81 @@ function PlanView({
               Showing the first 200 of {plan.conflicts.length} conflicts.
             </p>
           ) : null}
+        </Section>
+      ) : null}
+
+      {plan.combinedClasses.length ? (
+        <Section
+          title={`Possible combined classes (${plan.combinedClasses.length})`}
+          tone="amber"
+        >
+          <p className="mb-2 text-xs text-muted">
+            The same subject is scheduled for several sections at once. This may be intentional
+            concurrent teaching — confirm each block, it is not treated as an error.
+          </p>
+          <ul className="space-y-1">
+            {plan.combinedClasses.slice(0, 200).map((c, i) => (
+              <li key={i}>{c.message}</li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+
+      {plan.duplicateSchedules.length ? (
+        <Section
+          title={`Possible duplicate records (${plan.duplicateSchedules.length})`}
+          tone="amber"
+        >
+          <p className="mb-2 text-xs text-muted">
+            One class appears twice with overlapping times — usually alternative rooms or durations
+            listed in the same cell. These are not conflicts.
+          </p>
+          <ul className="space-y-1">
+            {plan.duplicateSchedules.slice(0, 200).map((c, i) => (
+              <li key={i}>{c.message}</li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+
+      {plan.incompleteSchedules.length ? (
+        <Section
+          title={`Incomplete schedules (${plan.incompleteSchedules.length})`}
+          tone="amber"
+        >
+          <p className="mb-2 text-xs text-muted">
+            Day or time information is missing or unusable, so these rows cannot be imported. No
+            times were invented.
+          </p>
+          <ul className="space-y-1">
+            {plan.incompleteSchedules.map((s, i) => (
+              <li key={i}>
+                <span className="font-mono text-xs">Row {s.row}</span> — CN {s.cn} {s.subject}:{" "}
+                {s.message}
+              </li>
+            ))}
+          </ul>
+        </Section>
+      ) : null}
+
+      {plan.tbaClassrooms.length ? (
+        <Section
+          title={`Classes without a room yet (${plan.tbaClassrooms.length})`}
+          tone="amber"
+        >
+          <p className="mb-2 text-xs text-muted">
+            These classes have a known time but no physical room assigned. They are not errors and
+            still count for attendance and printing.
+          </p>
+          <ul className="space-y-1">
+            {plan.tbaClassrooms.map((t, i) => (
+              <li key={i}>
+                <span className="font-mono text-xs">CN {t.cn}</span> {t.subject}{" "}
+                {t.section ? `· ${t.section}` : ""} · {t.courseCode} ·{" "}
+                {t.weekdays.map((d) => WEEKDAY_SHORT[d]).join("/")} · row {t.row}
+              </li>
+            ))}
+          </ul>
         </Section>
       ) : null}
 
@@ -344,14 +633,21 @@ function PlanView({
         ) : null}
       </Section>
 
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
         <button
           className="btn btn-primary"
           onClick={onConfirm}
-          disabled={loading || s.importable === 0}
+          disabled={loading || scopeChanges === 0}
         >
-          {loading ? "Importing…" : `Confirm import (${s.importable} changes)`}
+          {loading
+            ? "Importing…"
+            : `Confirm import (${scopeChanges} change${scopeChanges === 1 ? "" : "s"} in ${scopeLabel})`}
         </button>
+        {scopeChanges === 0 ? (
+          <span className="text-xs text-muted">
+            Nothing to write in this scope — choose another college or course.
+          </span>
+        ) : null}
       </div>
     </div>
   );

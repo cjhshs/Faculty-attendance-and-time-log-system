@@ -2,8 +2,8 @@ import { NextResponse } from "next/server";
 import ExcelJS from "exceljs";
 import { getCurrentUser, hasPermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
-import { prisma } from "@/lib/prisma";
 import { buildSummary } from "@/lib/summary";
+import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { parseISODate, cutoffRange, formatLong } from "@/lib/dates";
 import { getActiveTerm, parseTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
@@ -40,7 +40,33 @@ export async function GET(request: Request) {
   }
 
   const programCode = url.searchParams.get("program");
-  const course = programCode ? await prisma.course.findUnique({ where: { code: programCode } }) : null;
+  const collegeCode = url.searchParams.get("college");
+  const collegeOptions = await getCollegeOptions();
+  const scope = normalizeScopeSelection(collegeOptions, {
+    college: collegeCode,
+    program: programCode,
+  });
+  const course = scope.program
+    ? { code: scope.program, name: collegeOptions.all.find((p) => p.code === scope.program)?.name ?? null }
+    : null;
+  const scopedCourseIds = scope.program
+    ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
+    : scope.college === "unassigned"
+      ? collegeOptions.unassigned.map((p) => p.id)
+      : scope.college
+        ? collegeOptions.colleges.find((c) => c.code === scope.college)?.programs.map((p) => p.id) ?? []
+        : null;
+  const collegeName =
+    scope.college === "unassigned"
+      ? "Unassigned programs"
+      : scope.college
+        ? collegeOptions.colleges.find((c) => c.code === scope.college)?.name ?? null
+        : null;
+  const scopeLabel = course
+    ? `Program: ${course.code}`
+    : collegeName
+      ? `College: ${collegeName}`
+      : "All colleges";
 
   const yearParam = url.searchParams.get("schoolYear");
   const semParam = url.searchParams.get("semester");
@@ -53,7 +79,7 @@ export async function GET(request: Request) {
     selectedTerm = await getActiveTerm();
   }
 
-  const summary = await buildSummary(start, end, course?.id, selectedTerm);
+  const summary = await buildSummary(start, end, scopedCourseIds ?? undefined, selectedTerm);
   const generated = new Date().toISOString().slice(0, 10);
   const rangeLabel = `${formatLong(start)} to ${formatLong(end)}${selectedTerm ? ` (${selectedTerm.schoolYear} ${selectedTerm.semester})` : ""}`;
 
@@ -76,9 +102,7 @@ export async function GET(request: Request) {
   overall.getCell("A1").value = "ATTENDANCE SUMMARY";
   overall.getCell("A1").font = { bold: true, size: 14 };
   overall.mergeCells("A2:G2");
-  overall.getCell("A2").value = `Range: ${rangeLabel}   |   Generated: ${generated}${
-    course ? `   |   Program: ${course.code}` : ""
-  }`;
+  overall.getCell("A2").value = `Range: ${rangeLabel}   |   Generated: ${generated}   |   ${scopeLabel}`;
   overall.mergeCells("A3:G3");
   overall.getCell("A3").value = `Faculty: ${summary.totals.facultyCount}   Encoded scheduled hrs: ${summary.totals.scheduledHours}   Present hrs: ${summary.totals.presentHours}   Absent hrs: ${summary.totals.absentHours}`;
   if (summary.incomplete.length > 0) {
@@ -185,9 +209,7 @@ export async function GET(request: Request) {
   await writeAudit(
     user.id,
     "summary.export",
-    `Exported summary ${start.toISOString().slice(0, 10)}..${end.toISOString().slice(0, 10)}${
-      course ? ` (${course.code})` : ""
-    }`,
+    `Exported summary ${start.toISOString().slice(0, 10)}..${end.toISOString().slice(0, 10)} (${scopeLabel})`,
   );
 
   return new NextResponse(Buffer.from(arrayBuffer), {

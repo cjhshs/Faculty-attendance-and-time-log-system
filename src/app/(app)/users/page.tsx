@@ -108,13 +108,14 @@ export default async function UsersPage() {
                   )}
                 </td>
                 {canManageUsers ? (
-                  <td className="space-y-2">
+                  <td className="align-middle">
+                    <div className="flex items-center gap-2 whitespace-nowrap">
                     <ActionButton
                       action={toggleUserActive}
                       label={u.active ? "Deactivate" : "Activate"}
                       fields={{ userId: u.id }}
                     />
-                    <details className="mt-1">
+                    <details>
                       <summary className="cursor-pointer text-xs text-navy-2">Manage</summary>
                       <div className="mt-2 w-64 space-y-2">
                         <ActionForm action={assignRoles} submitLabel="Save roles">
@@ -144,6 +145,7 @@ export default async function UsersPage() {
                         </ActionForm>
                       </div>
                     </details>
+                    </div>
                     </td>
                   ) : null}
                 </tr>

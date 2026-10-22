@@ -20,6 +20,9 @@
 # production
 /build
 
+# database backups created by the System Reset page
+/backups
+
 # misc
 .DS_Store
 *.pem

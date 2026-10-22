@@ -96,19 +96,70 @@ describe("D. no cross-program contamination", () => {
 });
 
 describe("E. faculty conflicts are detected, not resolved", () => {
-  it("reports the known double-bookings", () => {
-    const pairs = (faculty: string) =>
-      plan.conflicts
-        .filter((c) => c.facultyName.startsWith(faculty) && c.weekday === 1)
-        .map((c) => [c.a.cn, c.b.cn].sort().join("/"));
-    expect(pairs("Buhat")).toContain(["48173", "48112"].sort().join("/"));
-    expect(pairs("Fajartin")).toContain(["48103", "48142"].sort().join("/"));
-    expect(pairs("Pascual")).toContain(["48113", "48101"].sort().join("/"));
+  const pairOf = (c: ImportPlan["conflicts"][number]) => [c.a.cn, c.b.cn].sort().join("/");
+
+  it("reports only genuine double-bookings", () => {
+    expect(plan.conflicts.length).toBe(17);
+    expect(new Set(plan.conflicts.map((c) => c.facultyName)).size).toBe(8);
+    expect(plan.conflicts.every((c) => c.kind === "CONFLICT" && c.blocking)).toBe(true);
   });
 
-  it("reports every overlapping pair and marks same-CN overlaps", () => {
-    expect(plan.conflicts.length).toBeGreaterThan(100);
-    expect(plan.conflicts.some((c) => c.sameClassNumber)).toBe(true);
+  it("finds the conflicts the source sheet really contains", () => {
+    const pairs = plan.conflicts.map(pairOf);
+    expect(pairs).toContain(["42000", "42011"].sort().join("/")); // Claver, LIS101 vs LIS111, 10-11
+    expect(pairs).toContain(["48005", "48007"].sort().join("/")); // Saligumba, GE501 vs GE401, 8-9
+    expect(pairs).toContain(["44034", "48075"].sort().join("/")); // Tabal, FIL1 vs GE205, 2-3
+    expect(pairs).toContain(["48085", "48135"].sort().join("/")); // Pascual, SP101 vs CC104 Friday
+    expect(pairs).toContain(["40001", "47016"].sort().join("/")); // Nosotros, Mon+Tue 5-7
+  });
+
+  it("collapses a repeated day-by-day overlap into one finding", () => {
+    const jamero = plan.conflicts.filter((c) => c.facultyName.startsWith("Jamero") &&
+      [c.a.cn, c.b.cn].sort().join("/") === ["47013", "47020"].sort().join("/"));
+    expect(jamero).toHaveLength(1);
+    expect(jamero[0].weekdays).toEqual([1, 2, 3, 4, 5]);
+    expect(jamero[0].message.match(/Monday/g) ?? []).toHaveLength(1);
+  });
+
+  it("keeps the same class split with different end times out of conflicts", () => {
+    const espinosa = plan.duplicateSchedules.find((c) => c.a.cn === "48146");
+    expect(espinosa).toBeDefined();
+    expect(espinosa!.kind).toBe("DUPLICATE");
+    expect(plan.conflicts.some((c) => c.a.cn === "48146" && c.b.cn === "48146")).toBe(false);
+  });
+
+  it("reports the same subject taught to several sections as a possible combined class", () => {
+    const buhat = plan.combinedClasses.find(
+      (c) => pairOf(c) === ["48112", "48173"].sort().join("/"),
+    );
+    expect(buhat).toBeDefined();
+    expect(buhat!.blocking).toBe(false);
+    expect(plan.conflicts.some((c) => pairOf(c) === ["48112", "48173"].sort().join("/"))).toBe(false);
+  });
+
+  it("reports one combined block per time slot instead of every section pair", () => {
+    const crujedo = plan.combinedClasses.filter((c) => c.facultyName.startsWith("Crujedo"));
+    expect(crujedo).toHaveLength(1);
+    expect(crujedo[0].cnList).toHaveLength(6);
+  });
+
+  it("reports the same subject and section split across two CNs as a duplicate", () => {
+    const narciso = plan.duplicateSchedules.find(
+      (c) => [c.a.cn, c.b.cn].sort().join("/") === ["42003", "42007"].sort().join("/"),
+    );
+    expect(narciso).toBeDefined();
+    expect(narciso!.sameSubject).toBe(true);
+    expect(narciso!.sameSection).toBe(true);
+    expect(plan.conflicts.some((c) => pairOf(c) === ["42003", "42007"].sort().join("/"))).toBe(false);
+  });
+
+  it("never flags a consecutive class that starts when the previous one ends", () => {
+    const silah = [
+      ...plan.conflicts,
+      ...plan.combinedClasses,
+      ...plan.duplicateSchedules,
+    ].filter((c) => c.facultyName.startsWith("Silah"));
+    expect(silah).toEqual([]);
   });
 });
 
