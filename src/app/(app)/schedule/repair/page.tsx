@@ -167,7 +167,7 @@ export default async function RepairPage({
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       <div>
         <h1 className="page-title">Repair Schedule</h1>
         <p className="page-subtitle">

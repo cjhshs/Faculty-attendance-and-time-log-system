@@ -4,14 +4,51 @@ import { useState } from "react";
 import type { ImportPlan, CommitResult } from "@/lib/import";
 import { WEEKDAY_SHORT } from "@/lib/dates";
 
+type PeriodOption = {
+  schoolYear: string;
+  semester: string;
+  configured: boolean;
+  startDate: string | null;
+  endDate: string | null;
+  status: string | null;
+};
+
+type DuplicateImport = {
+  id: number;
+  filename: string;
+  schoolYear: string;
+  semester: string;
+  slotCount: number;
+  checksum: string | null;
+  createdAt: string;
+  message?: string;
+};
+
+type ImportHistoryEntry = {
+  id: number;
+  filename: string;
+  schoolYear: string;
+  semester: string;
+  slotCount: number;
+  checksum: string | null;
+  createdAt: string;
+  importedBy: string | null;
+};
+
 export function ImportClient({
   defaultSchoolYear,
   defaultSemester,
   knownYears,
+  semesters,
+  periods,
+  importHistory,
 }: {
   defaultSchoolYear: string;
   defaultSemester: string;
   knownYears: string[];
+  semesters: string[];
+  periods: PeriodOption[];
+  importHistory: ImportHistoryEntry[];
 }) {
   const [file, setFile] = useState<File | null>(null);
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear);
@@ -22,14 +59,27 @@ export function ImportClient({
   const [result, setResult] = useState<CommitResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [duplicateImport, setDuplicateImport] = useState<DuplicateImport | null>(null);
+  const [termWarning, setTermWarning] = useState<string | null>(null);
+  const [previewPeriod, setPreviewPeriod] = useState<PeriodOption | null>(null);
 
-  function buildBody() {
+  function resetPreview() {
+    setPlan(null);
+    setResult(null);
+    setError(null);
+    setDuplicateImport(null);
+    setTermWarning(null);
+    setPreviewPeriod(null);
+  }
+
+  function buildBody(confirmDuplicate = false) {
     const body = new FormData();
     if (file) body.append("file", file);
     body.append("schoolYear", schoolYear);
     body.append("semester", semester);
     if (scopeCollege) body.append("college", scopeCollege);
     if (scopeProgram) body.append("program", scopeProgram);
+    if (confirmDuplicate) body.append("confirmDuplicate", "1");
     return body;
   }
 
@@ -40,16 +90,21 @@ export function ImportClient({
       return;
     }
     setLoading(true);
-    setError(null);
-    setResult(null);
-    setPlan(null);
+    resetPreview();
     setScopeCollege("");
     setScopeProgram("");
     try {
       const res = await fetch("/api/schedule/preview", { method: "POST", body: buildBody() });
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(
+          "Your session has expired or you no longer have permission. Sign in again; no file was imported.",
+        );
+      }
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "Preview failed.");
       setPlan(data.plan);
+      setDuplicateImport(data.duplicateImport ?? null);
+      setPreviewPeriod(data.period ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Preview failed.");
     } finally {
@@ -57,10 +112,17 @@ export function ImportClient({
     }
   }
 
-  async function commit() {
+  async function commit(forceDuplicate = false) {
     if (!file) return;
     const termLabel = `${schoolYear.trim()} ${semester}`;
     const scopeLabel = scopeProgram || scopeCollege || "all colleges";
+    if (duplicateImport && !forceDuplicate) {
+      const ok = window.confirm(
+        `${duplicateImport.message ?? "This exact file was already imported into this academic period."}\n\nImport it again into ${termLabel}? Existing attendance is not affected, but the same schedule records will be written again.`,
+      );
+      if (!ok) return;
+      forceDuplicate = true;
+    }
     if (
       !window.confirm(
         `Import ${scopeLabel} from this file into ${termLabel}? Existing schedules in that semester are updated, never deleted. Attendance is not affected. Conflicts are always checked across every department in the file.`,
@@ -70,11 +132,28 @@ export function ImportClient({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/schedule/commit", { method: "POST", body: buildBody() });
+      const res = await fetch("/api/schedule/commit", {
+        method: "POST",
+        body: buildBody(forceDuplicate),
+      });
+      if (res.status === 401 || res.status === 403) {
+        throw new Error(
+          "Your session has expired or you no longer have permission. Sign in again; nothing was imported.",
+        );
+      }
       const data = await res.json();
+      if (res.status === 409 && data.requiresConfirmation) {
+        setDuplicateImport(data.duplicateImport ?? null);
+        setError(
+          `${data.error} Nothing was saved. Review the import history, then use “Import anyway” only if this repeat is intentional.`,
+        );
+        return;
+      }
       if (!res.ok) throw new Error(data.error || "Import failed.");
       setResult(data.result);
+      setTermWarning(data.termWarning ?? null);
       setPlan(null);
+      setDuplicateImport(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Import failed.");
     } finally {
@@ -98,6 +177,13 @@ export function ImportClient({
     URL.revokeObjectURL(url);
   }
 
+  const selectedPeriod =
+    previewPeriod ??
+    periods.find(
+      (p) => p.schoolYear === schoolYear.trim() && p.semester === semester,
+    ) ??
+    null;
+
   return (
     <div className="space-y-6">
       <div className="card space-y-4">
@@ -112,9 +198,7 @@ export function ImportClient({
             className="input max-w-md"
             onChange={(e) => {
               setFile(e.target.files?.[0] ?? null);
-              setPlan(null);
-              setResult(null);
-              setError(null);
+              resetPreview();
             }}
           />
         </div>
@@ -131,7 +215,7 @@ export function ImportClient({
               value={schoolYear}
               onChange={(e) => {
                 setSchoolYear(e.target.value);
-                setPlan(null);
+                resetPreview();
               }}
               placeholder="e.g. 2027-2028"
             />
@@ -151,12 +235,14 @@ export function ImportClient({
               value={semester}
               onChange={(e) => {
                 setSemester(e.target.value);
-                setPlan(null);
+                resetPreview();
               }}
             >
-              <option value="1st Semester">1st Semester</option>
-              <option value="2nd Semester">2nd Semester</option>
-              <option value="Summer">Summer</option>
+              {semesters.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
             </select>
           </div>
           <button className="btn btn-primary" onClick={preview} disabled={!file || loading}>
@@ -171,9 +257,55 @@ export function ImportClient({
           </strong>
           . Nothing is saved until you confirm.
         </p>
+
+        <div className="rounded-md border border-line bg-slate-50 px-3 py-2 text-xs">
+          <p>
+            <strong>Academic period:</strong> {schoolYear.trim() || "—"} · {semester}
+            {selectedPeriod?.startDate && selectedPeriod.endDate ? (
+              <>
+                {" "}
+                · {selectedPeriod.startDate} to {selectedPeriod.endDate}
+                {selectedPeriod.status ? ` · ${selectedPeriod.status.toLowerCase()}` : ""}
+              </>
+            ) : selectedPeriod ? (
+              " · semester dates not configured"
+            ) : (
+              " · not registered yet"
+            )}
+          </p>
+          {!selectedPeriod ? (
+            <p className="mt-1 text-amber-800">
+              This period is not registered. Confirming the import registers it with no semester
+              dates; dates are never guessed from the workbook.
+            </p>
+          ) : !selectedPeriod.startDate || !selectedPeriod.endDate ? (
+            <p className="mt-1 text-amber-800">
+              This period has no reviewed semester dates. The import can still proceed, but
+              attendance dates cannot be checked against a semester boundary until they are set on
+              Settings.
+            </p>
+          ) : null}
+        </div>
       </div>
 
+      {duplicateImport ? (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          <p className="font-semibold">This file was already imported into this period.</p>
+          <p className="mt-1 text-xs">
+            {duplicateImport.message ??
+              `Batch #${duplicateImport.id} imported ${duplicateImport.filename} into ${duplicateImport.schoolYear} · ${duplicateImport.semester} with ${duplicateImport.slotCount} slot(s) written.`}{" "}
+            Existing attendance and other periods are not affected. Re-importing is only for a
+            deliberate refresh of the same schedule.
+          </p>
+          <button type="button" className="btn btn-sm mt-2" onClick={() => commit(true)} disabled={loading}>
+            Import anyway
+          </button>
+        </div>
+      ) : null}
+
       {error ? <div className="alert alert-error">{error}</div> : null}
+
+      {termWarning ? <div className="alert alert-warn">{termWarning}</div> : null}
 
       {result ? (
         <div className="alert alert-success">
@@ -203,6 +335,52 @@ export function ImportClient({
           onProgramChange={setScopeProgram}
         />
       ) : null}
+
+      <div className="card">
+        <h3 className="mb-2 text-sm font-semibold text-navy">
+          Import history ({importHistory.length})
+        </h3>
+        <p className="mb-2 text-xs text-muted">
+          Every committed upload is recorded with its academic period and a checksum. Re-uploading
+          the exact same file into the same period asks for confirmation before writing anything.
+        </p>
+        {importHistory.length === 0 ? (
+          <p className="text-sm text-muted">No schedules have been imported yet.</p>
+        ) : (
+          <div className="max-h-72 overflow-auto">
+            <table className="data-table min-w-[38rem]">
+              <thead>
+                <tr>
+                  <th scope="col">Imported</th>
+                  <th scope="col">File</th>
+                  <th scope="col">Academic period</th>
+                  <th scope="col">Slots</th>
+                  <th scope="col">By</th>
+                  <th scope="col">Checksum</th>
+                </tr>
+              </thead>
+              <tbody>
+                {importHistory.map((batch) => (
+                  <tr key={batch.id}>
+                    <td className="whitespace-nowrap text-xs">{batch.createdAt.slice(0, 16).replace("T", " ")}</td>
+                    <td className="max-w-[16rem] truncate text-xs" title={batch.filename}>
+                      {batch.filename}
+                    </td>
+                    <td className="whitespace-nowrap text-xs">
+                      {batch.schoolYear} · {batch.semester}
+                    </td>
+                    <td className="text-center text-xs">{batch.slotCount}</td>
+                    <td className="text-xs">{batch.importedBy ?? "—"}</td>
+                    <td className="text-xs text-muted">
+                      {batch.checksum ? `${batch.checksum.slice(0, 10)}…` : "not recorded"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -265,6 +443,10 @@ function PlanView({
       : true,
   );
 
+  const sourceMismatch = plan.targetTerm
+    ? plan.sourceSemesters.filter((entry) => entry.semester !== plan.targetTerm!.semester)
+    : [];
+
   return (
     <div className="space-y-4">
       {plan.targetTerm ? (
@@ -274,6 +456,28 @@ function PlanView({
             {plan.targetTerm.schoolYear} · {plan.targetTerm.semester}
           </strong>
         </p>
+      ) : null}
+
+      {plan.sourceSemesters.length > 0 ? (
+        <div
+          className={
+            "rounded-md border px-3 py-2 text-xs " +
+            (sourceMismatch.length
+              ? "border-amber-300 bg-amber-50 text-amber-900"
+              : "border-line bg-slate-50 text-muted")
+          }
+        >
+          <strong>Semester written in the workbook:</strong>{" "}
+          {plan.sourceSemesters
+            .map((entry) => `${entry.semester} (${entry.rows} row${entry.rows === 1 ? "" : "s"})`)
+            .join(", ")}
+          .{" "}
+          {sourceMismatch.length
+            ? `These rows will still be imported into the selected period (${
+                plan.targetTerm?.schoolYear ?? "—"
+              } · ${plan.targetTerm?.semester ?? "—"}). The source value is reported, never used to move the rows into another period.`
+            : "The workbook term matches the selected target period."}
+        </div>
       ) : null}
 
       <div className="card space-y-3">
@@ -373,6 +577,11 @@ function PlanView({
           value={s.programsUnknown}
           tone={s.programsUnknown ? "red" : undefined}
         />
+        <Stat
+          label="Instructor review"
+          value={plan.facultyReview.length}
+          tone={plan.facultyReview.length ? "red" : undefined}
+        />
       </div>
 
       <p className="text-xs text-muted">
@@ -439,6 +648,61 @@ function PlanView({
           </table>
         </div>
       </Section>
+
+      {plan.facultyReview.length ? (
+        <Section title={`Instructor review (${plan.facultyReview.length})`} tone="amber">
+          <p className="mb-2 text-xs text-muted">
+            These instructor names could not be matched safely to one registered faculty member. No
+            department was guessed from the course code, subject or student program. Unknown names
+            may be new hires or typos; ambiguous names match more than one roster row; a roster match
+            without a department must be assigned on Master Data before it appears in a department
+            attendance sheet.
+          </p>
+          <div className="max-h-80 overflow-auto">
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th scope="col">Instructor in file</th>
+                  <th scope="col">Issue</th>
+                  <th scope="col">Rows</th>
+                  <th scope="col">Programs</th>
+                  <th scope="col">Possible roster match</th>
+                </tr>
+              </thead>
+              <tbody>
+                {plan.facultyReview.map((entry) => (
+                  <tr key={`${entry.kind}-${entry.name}`}>
+                    <td className="font-medium">{entry.name}</td>
+                    <td>
+                      {entry.kind === "unknown" ? (
+                        <span className="badge bg-red-100 text-red-800">Unknown instructor</span>
+                      ) : entry.kind === "ambiguous" ? (
+                        <span className="badge bg-red-100 text-red-800">Ambiguous name</span>
+                      ) : (
+                        <span className="badge bg-amber-100 text-amber-800">No department</span>
+                      )}
+                    </td>
+                    <td className="text-center">{entry.rows.join(", ")}</td>
+                    <td>{entry.programs.join(", ") || "—"}</td>
+                    <td>
+                      {entry.candidates.length === 0 ? (
+                        <span className="text-muted">None — add the faculty on Master Data</span>
+                      ) : (
+                        entry.candidates
+                          .map(
+                            (c) =>
+                              `${c.fullName} (${c.departmentCode ?? "no department"})`,
+                          )
+                          .join("; ")
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Section>
+      ) : null}
 
       {plan.conflicts.length ? (
         <Section title={`Confirmed instructor conflicts (${plan.conflicts.length})`} tone="red">

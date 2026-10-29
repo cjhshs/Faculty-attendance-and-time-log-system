@@ -41,12 +41,19 @@ function readToken(token: string): number | null {
   }
 }
 
+function isSecureCookie(): boolean {
+  const configured = process.env.SESSION_COOKIE_SECURE;
+  if (configured === "true") return true;
+  if (configured === "false") return false;
+  return process.env.NODE_ENV === "production";
+}
+
 export async function createSessionCookie(userId: number) {
   const store = await cookies();
   store.set(COOKIE_NAME, createToken(userId), {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isSecureCookie(),
     path: "/",
     maxAge: MAX_AGE_SECONDS,
   });

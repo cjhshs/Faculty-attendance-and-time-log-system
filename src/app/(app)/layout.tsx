@@ -17,8 +17,6 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     items.push({ href: "/attendance/encode", label: "Encode" });
   if (hasPermission(user, PERMISSIONS.SCHEDULE_IMPORT))
     items.push({ href: "/schedule/import", label: "Import Schedule" });
-  if (hasPermission(user, PERMISSIONS.SCHEDULE_REPAIR))
-    items.push({ href: "/schedule/repair", label: "Repair Schedule" });
   if (hasPermission(user, PERMISSIONS.FACULTY_VIEW))
     items.push({ href: "/schedule", label: "Schedule" });
   if (hasPermission(user, PERMISSIONS.FACULTY_VIEW))

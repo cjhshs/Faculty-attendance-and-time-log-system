@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 export type FilterProgram = { code: string; name: string | null };
 export type FilterCollege = { code: string; name: string; programs: FilterProgram[] };
@@ -28,6 +28,25 @@ export function CollegeCourseFilter({
 }) {
   const [selectedCollege, setSelectedCollege] = useState(college);
   const [selectedProgram, setSelectedProgram] = useState(program);
+
+  // Follow server/URL changes (for example a tab switch) and filter drafts
+  // restored by PersistForm.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync with a new server-provided URL scope
+    setSelectedCollege(college);
+    setSelectedProgram(program);
+  }, [college, program]);
+
+  useEffect(() => {
+    function onRestore(event: Event) {
+      const values = (event as CustomEvent<{ values?: Record<string, unknown> }>).detail?.values;
+      if (!values) return;
+      if (typeof values.college === "string") setSelectedCollege(values.college);
+      if (typeof values.program === "string") setSelectedProgram(values.program);
+    }
+    window.addEventListener("fa:draft-restored", onRestore);
+    return () => window.removeEventListener("fa:draft-restored", onRestore);
+  }, []);
 
   const activeCollege = useMemo(
     () => colleges.find((c) => c.code === selectedCollege) ?? null,

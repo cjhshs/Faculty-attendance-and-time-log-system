@@ -210,3 +210,32 @@ export function paginateColumns(
   if (pages.length === 0) pages.push([]);
   return pages;
 }
+
+// Stable page count for a set of program slots. Pagination depends only on the
+// number of faculty columns, never on the current viewport or print dialog, so
+// "print page N" always maps to the same page as the original print-all run.
+export function programPageCount(slots: SheetSlot[], perPage = FACULTY_PER_PAGE): number {
+  const columns = buildProgramSheet(slots).columns.length;
+  return Math.max(1, Math.ceil(columns / perPage));
+}
+
+export type PrintPageRef = {
+  courseIndex: number;
+  pageIndex: number;
+  pageNumber: number;
+};
+
+export function flattenPrintPages(
+  slotGroups: { slots: SheetSlot[] }[],
+  perPage = FACULTY_PER_PAGE,
+): PrintPageRef[] {
+  const refs: PrintPageRef[] = [];
+  let pageNumber = 0;
+  slotGroups.forEach((group, courseIndex) => {
+    const count = programPageCount(group.slots, perPage);
+    for (let pageIndex = 0; pageIndex < count; pageIndex++) {
+      refs.push({ courseIndex, pageIndex, pageNumber: ++pageNumber });
+    }
+  });
+  return refs;
+}

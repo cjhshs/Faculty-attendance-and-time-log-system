@@ -5,7 +5,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { buildSummary } from "@/lib/summary";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { parseISODate, cutoffRange, formatLong } from "@/lib/dates";
-import { getActiveTerm, parseTerm } from "@/lib/terms";
+import { getActiveTerm, parseTerm, isValidTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
 
 export const maxDuration = 60;
@@ -41,6 +41,7 @@ export async function GET(request: Request) {
 
   const programCode = url.searchParams.get("program");
   const collegeCode = url.searchParams.get("college");
+  const departmentCode = (url.searchParams.get("department") ?? "").trim();
   const collegeOptions = await getCollegeOptions();
   const scope = normalizeScopeSelection(collegeOptions, {
     college: collegeCode,
@@ -49,24 +50,30 @@ export async function GET(request: Request) {
   const course = scope.program
     ? { code: scope.program, name: collegeOptions.all.find((p) => p.code === scope.program)?.name ?? null }
     : null;
-  const scopedCourseIds = scope.program
-    ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
-    : scope.college === "unassigned"
-      ? collegeOptions.unassigned.map((p) => p.id)
-      : scope.college
-        ? collegeOptions.colleges.find((c) => c.code === scope.college)?.programs.map((p) => p.id) ?? []
-        : null;
+  const scopedCourseIds = departmentCode
+    ? null
+    : scope.program
+      ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
+      : scope.college === "unassigned"
+        ? collegeOptions.unassigned.map((p) => p.id)
+        : scope.college
+          ? collegeOptions.colleges.find((c) => c.code === scope.college)?.programs.map((p) => p.id) ?? []
+          : null;
   const collegeName =
     scope.college === "unassigned"
       ? "Unassigned programs"
       : scope.college
         ? collegeOptions.colleges.find((c) => c.code === scope.college)?.name ?? null
         : null;
-  const scopeLabel = course
-    ? `Program: ${course.code}`
-    : collegeName
-      ? `College: ${collegeName}`
-      : "All colleges";
+  const scopeLabel = departmentCode
+    ? departmentCode === "unassigned"
+      ? "Department: Faculty without a department"
+      : `Department: ${departmentCode}`
+    : course
+      ? `Program: ${course.code}`
+      : collegeName
+        ? `College: ${collegeName}`
+        : "All colleges";
 
   const yearParam = url.searchParams.get("schoolYear");
   const semParam = url.searchParams.get("semester");
@@ -78,8 +85,16 @@ export async function GET(request: Request) {
   } else {
     selectedTerm = await getActiveTerm();
   }
+  if (selectedTerm && !isValidTerm(selectedTerm)) {
+    return NextResponse.json(
+      { error: "The requested school year and semester are not a valid academic period." },
+      { status: 400 },
+    );
+  }
 
-  const summary = await buildSummary(start, end, scopedCourseIds ?? undefined, selectedTerm);
+  const summary = await buildSummary(start, end, scopedCourseIds ?? undefined, selectedTerm, {
+    departmentCode: departmentCode || null,
+  });
   const generated = new Date().toISOString().slice(0, 10);
   const rangeLabel = `${formatLong(start)} to ${formatLong(end)}${selectedTerm ? ` (${selectedTerm.schoolYear} ${selectedTerm.semester})` : ""}`;
 
@@ -97,16 +112,17 @@ export async function GET(request: Request) {
     { width: 13 },
     { width: 13 },
     { width: 13 },
+    { width: 13 },
   ];
-  overall.mergeCells("A1:G1");
+  overall.mergeCells("A1:H1");
   overall.getCell("A1").value = "ATTENDANCE SUMMARY";
   overall.getCell("A1").font = { bold: true, size: 14 };
-  overall.mergeCells("A2:G2");
+  overall.mergeCells("A2:H2");
   overall.getCell("A2").value = `Range: ${rangeLabel}   |   Generated: ${generated}   |   ${scopeLabel}`;
-  overall.mergeCells("A3:G3");
-  overall.getCell("A3").value = `Faculty: ${summary.totals.facultyCount}   Encoded scheduled hrs: ${summary.totals.scheduledHours}   Present hrs: ${summary.totals.presentHours}   Absent hrs: ${summary.totals.absentHours}`;
+  overall.mergeCells("A3:H3");
+  overall.getCell("A3").value = `Faculty: ${summary.totals.facultyCount}   Encoded scheduled hrs: ${summary.totals.scheduledHours}   Present hrs: ${summary.totals.presentHours}   Absent hrs: ${summary.totals.absentHours}   Not encoded hrs: ${summary.totals.unencodedHours}`;
   if (summary.incomplete.length > 0) {
-    overall.mergeCells("A4:G4");
+    overall.mergeCells("A4:H4");
     overall.getCell("A4").value = `INCOMPLETE: ${summary.incomplete.length} date/program scope(s) not encoded and excluded from absent hours: ${summary.incomplete
       .map((i) => `${i.date} ${i.course}`)
       .join("; ")}`;
@@ -118,6 +134,7 @@ export async function GET(request: Request) {
     "Scheduled hrs",
     "Present hrs",
     "Absent hrs",
+    "Not encoded hrs",
     "Present days",
     "Absent days",
     "Partial days",
@@ -133,6 +150,7 @@ export async function GET(request: Request) {
       f.encodedScheduledHours,
       f.presentHours,
       f.absentHours,
+      f.unencodedHours,
       f.presentDays,
       f.absentDays,
       f.partialDays,
@@ -150,12 +168,13 @@ export async function GET(request: Request) {
       { width: 12 },
       { width: 12 },
       { width: 12 },
+      { width: 12 },
       { width: 16 },
     ];
-    ws.mergeCells("A1:F1");
+    ws.mergeCells("A1:G1");
     ws.getCell("A1").value = f.name;
     ws.getCell("A1").font = { bold: true, size: 13 };
-    ws.mergeCells("A2:F2");
+    ws.mergeCells("A2:G2");
     ws.getCell("A2").value = `Range: ${rangeLabel}   |   Generated: ${generated}`;
 
     const head = ws.addRow([
@@ -164,6 +183,7 @@ export async function GET(request: Request) {
       "Scheduled hrs",
       "Present hrs",
       "Absent hrs",
+      "Not encoded hrs",
       "Status",
     ]);
     head.font = { bold: true };
@@ -179,7 +199,8 @@ export async function GET(request: Request) {
         d.scheduledHours,
         d.presentHours,
         d.absentHours,
-        d.encoded ? "Saved" : "Not encoded",
+        d.unencodedHours,
+        d.encoded ? "Saved" : "Not fully encoded",
       ]);
       row.eachCell((cell) => (cell.border = thinBorder()));
     }
@@ -190,6 +211,7 @@ export async function GET(request: Request) {
       f.encodedScheduledHours,
       f.presentHours,
       f.absentHours,
+      f.unencodedHours,
       `${f.presentDays}P / ${f.absentDays}A / ${f.partialDays}partial days`,
     ]);
     totals.font = { bold: true };

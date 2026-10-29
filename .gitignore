@@ -19,6 +19,7 @@
 
 # production
 /build
+/dist/
 
 # database backups created by the System Reset page
 /backups

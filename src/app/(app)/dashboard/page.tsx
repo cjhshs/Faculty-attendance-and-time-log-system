@@ -28,7 +28,7 @@ export default async function DashboardPage({
   ];
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-5">
       {denied ? (
         <div className="alert alert-warn">
           You do not have permission to open that page.

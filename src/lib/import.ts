@@ -1,6 +1,7 @@
 ﻿import * as XLSX from "xlsx";
 import { prisma } from "@/lib/prisma";
 import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/lib/schedule-parser";
+import { facultyNameKey, nameSimilarity, type RosterFaculty } from "@/lib/faculty-department";
 import { normalizeSemester } from "@/lib/terms";
 import { timeToMinutes, WEEKDAY_NAMES } from "@/lib/dates";
 import { programNameFor } from "@/lib/program-names";
@@ -185,8 +186,37 @@ export type ImportPlan = {
   newFacultyNames: string[];
   unassigned: { row: number; cn: string; subject: string }[];
   duplicateFacultyNames: { name: string; similarTo: string; row: number }[];
+  // Instructor names that cannot be safely assigned to a roster member. The
+  // parser never guesses a department from the course code or student program.
+  facultyReview: FacultyReviewEntry[];
+  // Distinct semester values written in the workbook's "Sem" column. They are
+  // reported only; with an explicit target term they are never used to move a
+  // row into a different period.
+  sourceSemesters: { semester: string; rows: number }[];
   missingColumns: string[];
 };
+
+// A human must resolve these before the roster/department is trustworthy. An
+// unknown name may be a new hire or a typo; an ambiguous name matches more than
+// one roster row; a "no-department" match is a real faculty member whose
+// official department has not been assigned yet.
+export type FacultyReviewKind = "unknown" | "ambiguous" | "no-department";
+
+export type FacultyReviewCandidate = {
+  facultyId: number;
+  fullName: string;
+  departmentCode: string | null;
+  departmentName: string | null;
+};
+
+export type FacultyReviewEntry = {
+  name: string;
+  kind: FacultyReviewKind;
+  rows: number[];
+  programs: string[];
+  candidates: FacultyReviewCandidate[];
+};
+
 
 export type ExistingSlot = {
   id: number;
@@ -466,7 +496,13 @@ export function detectScheduleConflicts(slots: PlannedSlot[]): ImportConflict[] 
 }
 
 export type PlanContext = {
-  faculty: { id: number; fullName: string }[];
+  faculty: {
+    id: number;
+    fullName: string;
+    departmentCode?: string | null;
+    departmentName?: string | null;
+    active?: boolean;
+  }[];
   courses: { id: number; code: string }[];
   rooms: { id: number; code: string }[];
   existingSlots: ExistingSlot[];
@@ -483,7 +519,10 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const missingColumns = ctx.missingColumns ?? [];
   const worksheetRows = ctx.worksheetRows ?? rows.length + 1;
   const roomById = new Map(ctx.rooms.map((r) => [r.id, r]));
-  const facultyByKey = new Map(ctx.faculty.map((f) => [nameKey(f.fullName), f]));
+  // Roster matching ignores capitalization, repeated spaces and comma spacing,
+  // but never reorders name tokens or drops middle initials. Two genuinely
+  // different people therefore cannot collapse into one match.
+  const facultyByKey = new Map(ctx.faculty.map((f) => [facultyNameKey(f.fullName), f]));
   const existingByKey = new Map(
     ctx.existingSlots.map((s) => {
       const roomCode = roomById.get(s.roomId)?.code ?? "";
@@ -498,11 +537,31 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const incompleteSchedules: IncompleteSchedule[] = [];
   const duplicateFacultyNames: { name: string; similarTo: string; row: number }[] = [];
   const newFacultyNames = new Set<string>();
+  // Every non-TBA instructor name in the file, with where it appeared. Used
+  // after parsing to report unknowns/ambiguities without guessing a department.
+  const instructorUsage = new Map<
+    string,
+    { name: string; rows: Set<number>; programs: Set<string> }
+  >();
   const seenSlotKeys = new Set<string>();
   const errorRowSet = new Set<number>();
   const warningRowSet = new Set<number>();
   let meetingEntries = 0;
   let validBlocks = 0;
+
+  // Read the workbook's own semester column so the preview can warn when the
+  // file describes a different term than the one selected for import. This is
+  // reported, never used to override the explicit target term.
+  const sourceSemesterCounts = new Map<string, number>();
+  for (const row of rows) {
+    const rawSem = cell(row["Sem"]);
+    if (!rawSem) continue;
+    const sem = normalizeSemester(rawSem) ?? rawSem;
+    sourceSemesterCounts.set(sem, (sourceSemesterCounts.get(sem) ?? 0) + 1);
+  }
+  const sourceSemesters = Array.from(sourceSemesterCounts.entries())
+    .map(([semester, count]) => ({ semester, rows: count }))
+    .sort((a, b) => a.semester.localeCompare(b.semester));
 
   if (missingColumns.length > 0) {
     return {
@@ -520,6 +579,8 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
       newFacultyNames: [],
       unassigned: [],
       duplicateFacultyNames: [],
+      facultyReview: [],
+      sourceSemesters,
       missingColumns,
     };
   }
@@ -584,7 +645,15 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
     let facultyName: string | null = null;
     if (instructorRaw && instructorRaw.toUpperCase() !== "TBA") {
       facultyName = instructorRaw;
-      const key = nameKey(instructorRaw);
+      const key = facultyNameKey(instructorRaw);
+      const usage = instructorUsage.get(key) ?? {
+        name: instructorRaw,
+        rows: new Set<number>(),
+        programs: new Set<string>(),
+      };
+      usage.rows.add(rowNumber);
+      usage.programs.add(normalizeCourseCode(courseCode));
+      instructorUsage.set(key, usage);
       if (!facultyByKey.has(key)) {
         newFacultyNames.add(instructorRaw);
         for (const f of ctx.faculty) {
@@ -619,7 +688,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
         let status: PlannedSlotStatus = "new";
         if (existing) {
           const sameFaculty =
-            (existing.facultyId ? facultyByKey.get(nameKey(instructorRaw))?.id : null) === existing.facultyId;
+            (existing.facultyId ? facultyByKey.get(facultyNameKey(instructorRaw))?.id : null) === existing.facultyId;
           const unchanged =
             existing.subject === subject && (existing.description ?? "") === cell(row["Description"]) && sameFaculty;
           status = unchanged ? "unchanged" : "update";
@@ -656,6 +725,57 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const conflicts = findings.filter((c) => c.kind === "CONFLICT");
   const combinedClasses = findings.filter((c) => c.kind === "COMBINED");
   const duplicateSchedules = findings.filter((c) => c.kind === "DUPLICATE");
+
+  // Instructor review. This only reports; it never assigns a department. The
+  // course code, subject and student program are deliberately not used here.
+  const roster: RosterFaculty[] = ctx.faculty.map((f) => ({
+    id: f.id,
+    fullName: f.fullName,
+    departmentCode: f.departmentCode ?? null,
+    departmentName: f.departmentName ?? null,
+    active: f.active,
+  }));
+  const facultyReview: FacultyReviewEntry[] = [];
+  for (const usage of instructorUsage.values()) {
+    const target = facultyNameKey(usage.name);
+    const exact = roster.filter((f) => facultyNameKey(f.fullName) === target);
+    const candidates: FacultyReviewCandidate[] = exact.map((f) => ({
+      facultyId: f.id,
+      fullName: f.fullName,
+      departmentCode: f.departmentCode ?? null,
+      departmentName: f.departmentName ?? null,
+    }));
+    let kind: FacultyReviewKind | null = null;
+    if (exact.length > 1) {
+      kind = "ambiguous";
+    } else if (exact.length === 1) {
+      if (!exact[0].departmentCode) kind = "no-department";
+    } else {
+      kind = "unknown";
+      const similar = roster
+        .map((f) => ({ f, score: nameSimilarity(usage.name, f.fullName) }))
+        .filter((entry) => entry.score >= 0.86)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 5);
+      for (const entry of similar) {
+        candidates.push({
+          facultyId: entry.f.id,
+          fullName: entry.f.fullName,
+          departmentCode: entry.f.departmentCode ?? null,
+          departmentName: entry.f.departmentName ?? null,
+        });
+      }
+    }
+    if (!kind) continue;
+    facultyReview.push({
+      name: usage.name,
+      kind,
+      rows: Array.from(usage.rows).sort((a, b) => a - b),
+      programs: Array.from(usage.programs).sort(),
+      candidates,
+    });
+  }
+  facultyReview.sort((a, b) => a.name.localeCompare(b.name));
 
   // Classes whose time is known but whose physical room is still TBA. One entry
   // per class, not per weekday.
@@ -732,6 +852,8 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
     newFacultyNames: Array.from(newFacultyNames),
     unassigned,
     duplicateFacultyNames,
+    facultyReview,
+    sourceSemesters,
     missingColumns,
   };
 }
@@ -856,7 +978,7 @@ export async function buildPlan(
   const [courses, rooms, faculty, allExistingSlots] = await Promise.all([
     prisma.course.findMany({ select: { id: true, code: true, college: { select: { code: true } } } }),
     prisma.room.findMany(),
-    prisma.faculty.findMany(),
+    prisma.faculty.findMany({ include: { department: true } }),
     prisma.scheduleSlot.findMany(),
   ]);
 
@@ -871,7 +993,13 @@ export async function buildPlan(
   const plan = planFromRows(rows, {
     courses: courses.map((c) => ({ id: c.id, code: c.code })),
     rooms: rooms.map((r) => ({ id: r.id, code: r.code })),
-    faculty: faculty.map((f) => ({ id: f.id, fullName: f.fullName })),
+    faculty: faculty.map((f) => ({
+      id: f.id,
+      fullName: f.fullName,
+      departmentCode: f.department?.code ?? null,
+      departmentName: f.department?.name ?? null,
+      active: f.active,
+    })),
     existingSlots,
     target,
     worksheetRows,
@@ -910,7 +1038,7 @@ export type CommitResult = {
   batchId: number | null;
 };
 
-export type ImportBatchMeta = { filename?: string; importedById?: number };
+export type ImportBatchMeta = { filename?: string; importedById?: number; checksum?: string | null };
 
 export async function commitPlan(
   buffer: Buffer,
@@ -970,6 +1098,7 @@ export async function writePlan(
             filename: meta?.filename?.trim() || "schedule.xlsx",
             schoolYear: target.schoolYear,
             semester: target.semester,
+            checksum: meta?.checksum ?? null,
             importedById: meta?.importedById ?? null,
           },
         });

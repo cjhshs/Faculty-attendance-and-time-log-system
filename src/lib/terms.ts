@@ -58,17 +58,31 @@ async function firstTermInDb(): Promise<{ schoolYear: string; semester: string }
 }
 
 export async function listTerms(): Promise<{ schoolYear: string; semester: string }[]> {
-  const rows = await prisma.scheduleSlot.findMany({
-    where: { schoolYear: { not: null }, semester: { not: null } },
-    distinct: ["schoolYear", "semester"],
-    select: { schoolYear: true, semester: true },
-  });
-  const terms = rows.map((r) => ({ schoolYear: r.schoolYear!, semester: r.semester! }));
+  // Terms come from three sources: schedules that already exist, import
+  // history, and explicitly registered academic periods. A configured period
+  // must stay selectable even before any schedule is imported into it.
+  const [slotRows, periodRows] = await Promise.all([
+    prisma.scheduleSlot.findMany({
+      where: { schoolYear: { not: null }, semester: { not: null } },
+      distinct: ["schoolYear", "semester"],
+      select: { schoolYear: true, semester: true },
+    }),
+    prisma.academicPeriod.findMany({
+      select: { schoolYear: true, semester: true },
+    }),
+  ]);
+  const byKey = new Map<string, { schoolYear: string; semester: string }>();
+  const add = (schoolYear: string | null, semester: string | null) => {
+    if (!schoolYear || !semester) return;
+    const year = formatSchoolYear(schoolYear);
+    const sem = normalizeSemester(semester) ?? semester;
+    byKey.set(`${year}|${sem}`, { schoolYear: year, semester: sem });
+  };
+  for (const row of slotRows) add(row.schoolYear, row.semester);
+  for (const row of periodRows) add(row.schoolYear, row.semester);
   const active = await getActiveTerm();
-  if (!terms.some((t) => t.schoolYear === active.schoolYear && t.semester === active.semester)) {
-    terms.push(active);
-  }
-  return terms.sort(
+  add(active.schoolYear, active.semester);
+  return Array.from(byKey.values()).sort(
     (a, b) => a.schoolYear.localeCompare(b.schoolYear) || a.semester.localeCompare(b.semester),
   );
 }
@@ -91,4 +105,17 @@ export function parseTerm(
   const s = normalizeSemester(semester) ?? (semester ?? "").trim();
   if (!y || !s) return null;
   return { schoolYear: formatSchoolYear(y), semester: s };
+}
+
+// An explicit academic period must be a real school year and one of the three
+// supported semesters. Callers use this to refuse an invalid URL parameter
+// instead of quietly substituting the active term.
+export function isValidTerm(
+  term: { schoolYear: string; semester: string } | null | undefined,
+): term is { schoolYear: string; semester: string } {
+  return (
+    !!term &&
+    isValidSchoolYear(term.schoolYear) &&
+    (SEMESTER_OPTIONS as readonly string[]).includes(term.semester)
+  );
 }

@@ -30,6 +30,8 @@ model User {
   importBatches      ImportBatch[] @relation("ImportedBy")
   repairSources      RepairSource[] @relation("RepairBy")
   repairDecisions    RepairFinding[] @relation("RepairDecidedBy")
+  attendanceDrafts   AttendanceDraft[]
+  reportSignatures   ReportSignature[] @relation("SignatureUpdatedBy")
 
   @@map("users")
 }
@@ -85,15 +87,21 @@ model UserRole {
 // ---------------------------------------------------------------------------
 
 model Faculty {
-  id        Int            @id @default(autoincrement())
-  fullName  String         @map("full_name")
-  surname   String
-  active    Boolean        @default(true)
-  createdAt DateTime       @default(now()) @map("created_at")
-  updatedAt DateTime       @updatedAt @map("updated_at")
-  slots     ScheduleSlot[]
+  id           Int            @id @default(autoincrement())
+  fullName     String         @map("full_name")
+  surname      String
+  // The faculty member's official department. This is independent of the
+  // programs they teach; a CET instructor may teach a BSIT minor subject
+  // without becoming a BSIT faculty member. NULL means "not yet reviewed".
+  departmentId Int?           @map("department_id")
+  active       Boolean        @default(true)
+  createdAt    DateTime       @default(now()) @map("created_at")
+  updatedAt    DateTime       @updatedAt @map("updated_at")
+  department   College?       @relation("FacultyDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
+  slots        ScheduleSlot[]
 
   @@index([active])
+  @@index([departmentId])
   @@map("faculty")
 }
 
@@ -107,6 +115,7 @@ model College {
   createdAt DateTime @default(now()) @map("created_at")
   updatedAt DateTime @updatedAt @map("updated_at")
   courses   Course[]
+  faculty   Faculty[] @relation("FacultyDepartment")
 
   @@map("colleges")
 }
@@ -206,14 +215,49 @@ model ImportBatch {
   schoolYear   String         @map("school_year")
   semester     String
   slotCount    Int            @default(0) @map("slot_count")
+  // SHA-256 of the uploaded workbook. Lets the importer recognise the exact
+  // same file being committed twice into the same academic period.
+  checksum     String?
   importedById Int?           @map("imported_by_id")
   createdAt    DateTime       @default(now()) @map("created_at")
   importedBy   User?          @relation("ImportedBy", fields: [importedById], references: [id], onDelete: SetNull)
   slots        ScheduleSlot[]
 
   @@index([schoolYear, semester])
+  @@index([schoolYear, semester, checksum])
   @@index([createdAt])
   @@map("import_batches")
+}
+
+// ---------------------------------------------------------------------------
+// Academic periods
+// ---------------------------------------------------------------------------
+
+enum AcademicPeriodStatus {
+  ACTIVE   @map("active")
+  UPCOMING @map("upcoming")
+  ARCHIVED @map("archived")
+
+  @@map("academic_period_status")
+}
+
+// One configured school year + semester. Periods are created explicitly by an
+// administrator (or when an import supplies semester dates) so attendance can
+// never be generated against an invented academic period. Dates are nullable
+// for legacy term pairs that predate this table; NULL means "not reviewed".
+model AcademicPeriod {
+  id         Int                   @id @default(autoincrement())
+  schoolYear String                @map("school_year")
+  semester   String
+  startDate  DateTime?             @map("start_date") @db.Date
+  endDate    DateTime?             @map("end_date") @db.Date
+  status     AcademicPeriodStatus?
+  createdAt  DateTime              @default(now()) @map("created_at")
+  updatedAt  DateTime              @updatedAt @map("updated_at")
+
+  @@unique([schoolYear, semester])
+  @@index([schoolYear, semester])
+  @@map("academic_periods")
 }
 
 // ---------------------------------------------------------------------------
@@ -310,7 +354,9 @@ model Attendance {
   sessionId    Int?         @map("session_id")
   date         DateTime     @db.Date
   hourStart    String       @map("hour_start") // HH:mm — one row per scheduled hour
-  present      Boolean      @default(false)
+  // NULL = not yet encoded. true = present, false = absent. A missing row and a
+  // NULL row are both "not encoded" and must never be counted as an absence.
+  present      Boolean?     @map("present")
   reason       String?
   roomOverride String?      @map("room_override")
   encodedById  Int          @map("encoded_by")
@@ -363,4 +409,46 @@ model AuditLog {
 
   @@index([createdAt])
   @@map("audit_log")
+}
+
+// ---------------------------------------------------------------------------
+// Drafts and print signatures
+// ---------------------------------------------------------------------------
+
+// Autosaved working state for an attendance encoding session. Drafts are
+// private to the user who created them and never finalize attendance: only the
+// explicit Save Attendance action writes official `attendance` rows.
+model AttendanceDraft {
+  id        Int      @id @default(autoincrement())
+  userId    Int      @map("user_id")
+  // Stable scope such as `encode:CET:2026-10-27:2026-2027:1st Semester`.
+  scopeKey  String   @map("scope_key")
+  payload   Json
+  version   Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, scopeKey])
+  @@index([updatedAt])
+  @@map("attendance_drafts")
+}
+
+// Prepared-by / checked-by values for a printable attendance scope. Scoped by
+// department (or program) and term so revisiting the same sheet restores the
+// names without re-typing them, while a different department keeps its own.
+model ReportSignature {
+  id                  Int      @id @default(autoincrement())
+  scopeKey            String   @unique @map("scope_key")
+  preparedBy          String   @default("") @map("prepared_by")
+  preparedDesignation String   @default("") @map("prepared_designation")
+  checkedBy           String   @default("") @map("checked_by")
+  checkedDesignation  String   @default("") @map("checked_designation")
+  updatedById         Int?     @map("updated_by_id")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+  updatedBy           User?    @relation("SignatureUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  @@index([updatedAt])
+  @@map("report_signatures")
 }

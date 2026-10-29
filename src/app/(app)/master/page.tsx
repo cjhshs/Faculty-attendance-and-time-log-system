@@ -5,13 +5,20 @@ import { ActionForm, ActionButton } from "../ActionForm";
 import { SearchForm } from "../SearchForm";
 import {
   assignCourseCollege,
+  assignFacultyDepartmentBulk,
+  autoAssignFacultyDepartments,
   createFaculty,
   createCourse,
   createRoom,
   deleteRoom,
   deleteCourse,
   toggleFaculty,
+  updateFacultyDepartment,
 } from "./actions";
+import { FacultyDepartmentForm } from "./FacultyDepartmentForm";
+import { BulkDepartmentForm } from "./BulkDepartmentForm";
+import { findDuplicateFacultyRows } from "@/lib/faculty-department";
+import { planAutoDepartmentAssignments } from "@/lib/faculty-auto-department";
 
 export default async function MasterPage({
   searchParams,
@@ -25,9 +32,10 @@ export default async function MasterPage({
   const cq = (params.cq ?? "").trim();
   const rq = (params.rq ?? "").trim();
 
-  const [faculty, courses, rooms, colleges] = await Promise.all([
+  const [faculty, courses, rooms, colleges, roster] = await Promise.all([
     prisma.faculty.findMany({
       where: fq ? { fullName: { contains: fq, mode: "insensitive" } } : undefined,
+      include: { department: { select: { code: true, name: true } } },
       orderBy: [{ surname: "asc" }, { fullName: "asc" }],
     }),
     prisma.course.findMany({
@@ -50,26 +58,230 @@ export default async function MasterPage({
       orderBy: { sortOrder: "asc" },
       include: { _count: { select: { courses: true } } },
     }),
+    // Full roster for bulk assignment and duplicate review. Kept separate from
+    // the search-filtered table so a search never hides an unassigned person.
+    prisma.faculty.findMany({
+      select: {
+        id: true,
+        fullName: true,
+        departmentId: true,
+        department: { select: { code: true, name: true } },
+      },
+      orderBy: [{ surname: "asc" }, { fullName: "asc" }],
+    }),
   ]);
 
   const needsReview = courses.filter((c) => c.collegeId == null || !c.official);
+  const unassignedRoster = roster.filter((f) => f.departmentId == null);
+  const facultyNeedsDepartment = faculty.filter((f) => f.departmentId == null);
+  const duplicates = findDuplicateFacultyRows(
+    roster.map((f) => ({
+      id: f.id,
+      fullName: f.fullName,
+      departmentCode: f.department?.code ?? null,
+    })),
+  );
+
+  // Evidence for automatic assignment is read fresh on every request. A
+  // suggestion is only made when every scheduled class maps to one college.
+  const unassignedIds = unassignedRoster.map((f) => f.id);
+  const scheduleColleges = unassignedIds.length
+    ? await prisma.scheduleSlot.findMany({
+        where: { facultyId: { in: unassignedIds } },
+        select: {
+          facultyId: true,
+          course: {
+            select: {
+              college: { select: { id: true, code: true, name: true } },
+            },
+          },
+        },
+      })
+    : [];
+  const collegesByFaculty = new Map<
+    number,
+    ({ id: number; code: string; name: string } | null)[]
+  >();
+  for (const slot of scheduleColleges) {
+    if (slot.facultyId == null) continue;
+    const list = collegesByFaculty.get(slot.facultyId) ?? [];
+    list.push(slot.course.college);
+    collegesByFaculty.set(slot.facultyId, list);
+  }
+  const autoDepartmentPlan = planAutoDepartmentAssignments(
+    unassignedRoster.map((f) => ({
+      id: f.id,
+      fullName: f.fullName,
+      departmentId: f.departmentId,
+      colleges: collegesByFaculty.get(f.id) ?? [],
+    })),
+  );
+  const autoSuggestionGroups = Array.from(
+    autoDepartmentPlan.suggestions.reduce((groups, suggestion) => {
+      const list = groups.get(suggestion.collegeCode) ?? [];
+      list.push(suggestion);
+      groups.set(suggestion.collegeCode, list);
+      return groups;
+    }, new Map<string, typeof autoDepartmentPlan.suggestions>()),
+  );
 
   return (
     <div className="min-w-0 space-y-6">
-      <h1 className="page-title">Master Data</h1>
+      <div>
+        <h1 className="page-title">Master Data</h1>
+        <p className="page-subtitle">Manage faculty, programs, rooms, and departments.</p>
+      </div>
 
-      <div className="grid gap-6 lg:grid-cols-2">
-        <section className="card min-w-0 lg:self-start">
-          <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="card min-w-0 space-y-4 lg:self-start">
+          <div className="flex items-center justify-between gap-2">
             <h2 className="section-title">Faculty ({faculty.length})</h2>
           </div>
+          <p className="text-xs text-muted">
+            A faculty member&apos;s department is the only source of attendance membership. Teaching
+            a subject for another program does not change it.
+          </p>
+          {facultyNeedsDepartment.length > 0 ? (
+            <p className="mb-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800">
+              {facultyNeedsDepartment.length} faculty member
+              {facultyNeedsDepartment.length === 1 ? "" : "s"} still need a department. They are
+              excluded from every department sheet until assigned, and appear under &ldquo;Faculty
+              without a department&rdquo; for review.
+            </p>
+          ) : null}
+          <p className="mb-3 text-xs text-muted">
+            {roster.length - unassignedRoster.length} assigned · {unassignedRoster.length} without a
+            department · {roster.length} registered in total.
+          </p>
+
+          {duplicates.length > 0 ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              <p className="font-semibold">
+                {duplicates.length} possible duplicate roster name
+                {duplicates.length === 1 ? "" : "s"} detected.
+              </p>
+              <p className="mt-1">
+                Nothing was merged or reassigned. Two people can genuinely share a name, so review
+                these rows before changing a department:
+              </p>
+              <ul className="mt-1 list-disc pl-4">
+                {duplicates.slice(0, 10).map((d) => (
+                  <li key={d.key}>
+                    {d.fullName} — {d.ids.length} rows (IDs {d.ids.join(", ")})
+                    {d.departmentCodes.every((code) => !code)
+                      ? " · none has a department"
+                      : ""}
+                  </li>
+                ))}
+              </ul>
+              {duplicates.length > 10 ? (
+                <p className="mt-1">…and {duplicates.length - 10} more.</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {canManage && unassignedRoster.length > 0 ? (
+            <div className="space-y-4">
+              <h3 className="mb-2 text-sm font-semibold">Bulk department assignment</h3>
+              <BulkDepartmentForm
+                action={assignFacultyDepartmentBulk}
+                faculty={roster.map((f) => ({
+                  id: f.id,
+                  fullName: f.fullName,
+                  departmentCode: f.department?.code ?? null,
+                  departmentName: f.department?.name ?? null,
+                }))}
+                departments={colleges.map((c) => ({ id: c.id, code: c.code, name: c.name }))}
+                unassignedCount={unassignedRoster.length}
+              />
+
+              <div className="rounded-lg border border-line bg-slate-50 p-3">
+                <h4 className="text-sm font-semibold text-navy">
+                  Automatic assignment from schedules
+                </h4>
+                <p className="mt-1 text-xs text-muted">
+                  A faculty member is assigned only when every scheduled class maps to exactly one
+                  college and no class has an unmapped program. Manual departments are never
+                  overwritten. Mixed or missing evidence stays in the review list.
+                </p>
+                <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs">
+                  <span>
+                    <strong className="text-green-700">
+                      {autoDepartmentPlan.suggestions.length}
+                    </strong>{" "}
+                    can be assigned safely
+                  </span>
+                  <span>
+                    <strong>{autoDepartmentPlan.unresolved.length}</strong> need review
+                  </span>
+                  <span>
+                    <strong>{unassignedRoster.length}</strong> currently unassigned
+                  </span>
+                </div>
+
+                {autoSuggestionGroups.length > 0 ? (
+                  <details className="mt-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-navy">
+                      Review the {autoDepartmentPlan.suggestions.length} suggestion
+                      {autoDepartmentPlan.suggestions.length === 1 ? "" : "s"}
+                    </summary>
+                    <ul className="mt-2 space-y-1">
+                      {autoSuggestionGroups.map(([code, suggestions]) => (
+                        <li key={code}>
+                          <strong>{code}</strong> — {suggestions.length}:{" "}
+                          {suggestions
+                            .slice(0, 12)
+                            .map((s) => s.fullName)
+                            .join(", ")}
+                          {suggestions.length > 12 ? ` …and ${suggestions.length - 12} more` : ""}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : (
+                  <p className="mt-2 text-xs text-muted">
+                    No faculty member has an unambiguous, fully mapped schedule yet. Import a
+                    schedule and assign each program&apos;s college first.
+                  </p>
+                )}
+
+                {autoDepartmentPlan.unresolved.length > 0 ? (
+                  <details className="mt-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-amber-800">
+                      Why {autoDepartmentPlan.unresolved.length} cannot be assigned automatically
+                    </summary>
+                    <ul className="mt-2 space-y-1 text-amber-900">
+                      {autoDepartmentPlan.unresolved.slice(0, 30).map((row) => (
+                        <li key={row.facultyId}>
+                          <strong>{row.fullName}</strong> — {row.detail}
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                ) : null}
+
+                {autoDepartmentPlan.suggestions.length > 0 ? (
+                  <ActionForm
+                    action={autoAssignFacultyDepartments}
+                    submitLabel={`Auto-assign ${autoDepartmentPlan.suggestions.length} faculty`}
+                  >
+                    <p className="text-xs text-muted">
+                      Writes only the {autoDepartmentPlan.suggestions.length} safe suggestion
+                      {autoDepartmentPlan.suggestions.length === 1 ? "" : "s"}. Every change is
+                      audited.
+                    </p>
+                  </ActionForm>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+
           <SearchForm
             action="/master"
             name="fq"
             defaultValue={fq}
             placeholder="Search faculty name..."
             hidden={{ cq, rq }}
-            className="mb-3"
           />
           {canManage ? (
             <ActionForm action={createFaculty} submitLabel="Add faculty" resetOnSuccess>
@@ -83,6 +295,22 @@ export default async function MasterPage({
                 placeholder="Dela Cruz, Juan P."
                 required
               />
+              <label className="label mt-2" htmlFor="faculty-department">
+                Department (optional)
+              </label>
+              <select
+                id="faculty-department"
+                name="departmentId"
+                className="input"
+                defaultValue=""
+              >
+                <option value="">No department yet</option>
+                {colleges.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.code} — {c.name}
+                  </option>
+                ))}
+              </select>
             </ActionForm>
           ) : null}
           <div className="mt-4 max-h-96 overflow-auto">
@@ -90,6 +318,7 @@ export default async function MasterPage({
               <thead>
                 <tr>
                   <th scope="col">Name</th>
+                  <th scope="col">Department</th>
                   <th scope="col">Status</th>
                   {canManage ? <th scope="col" aria-label="Actions"></th> : null}
                 </tr>
@@ -98,6 +327,24 @@ export default async function MasterPage({
                 {faculty.map((f) => (
                   <tr key={f.id} className={f.active ? "" : "text-muted"}>
                     <td>{f.fullName}</td>
+                    <td className="whitespace-nowrap text-xs">
+                      {canManage ? (
+                        <FacultyDepartmentForm
+                          action={updateFacultyDepartment}
+                          facultyId={f.id}
+                          departmentId={f.departmentId}
+                          departments={colleges.map((c) => ({
+                            id: c.id,
+                            code: c.code,
+                            name: c.name,
+                          }))}
+                        />
+                      ) : f.department ? (
+                        `${f.department.code} — ${f.department.name}`
+                      ) : (
+                        <span className="badge bg-amber-100 text-amber-800">No department</span>
+                      )}
+                    </td>
                     <td>{f.active ? "Active" : "Inactive"}</td>
                     {canManage ? (
                       <td className="whitespace-nowrap">
@@ -112,7 +359,7 @@ export default async function MasterPage({
                 ))}
                 {faculty.length === 0 ? (
                   <tr>
-                    <td colSpan={canManage ? 3 : 2} className="text-center text-muted">
+                    <td colSpan={canManage ? 4 : 3} className="text-center text-muted">
                       {fq ? "No faculty match your search." : "No faculty yet."}
                     </td>
                   </tr>
@@ -122,8 +369,8 @@ export default async function MasterPage({
           </div>
         </section>
 
-        <div className="min-w-0 space-y-6">
-          <section className="card min-w-0 lg:self-start">
+        <div className="min-w-0 space-y-4">
+          <section className="card min-w-0 space-y-4">
             <div className="flex items-center justify-between gap-2">
               <h2 className="section-title">Programs ({courses.length})</h2>
             </div>
@@ -133,7 +380,6 @@ export default async function MasterPage({
               defaultValue={cq}
               placeholder="Search program code or name..."
               hidden={{ fq, rq }}
-              className="mb-3 mt-1"
             />
             {canManage ? (
               <ActionForm action={createCourse} submitLabel="Add program" resetOnSuccess>
@@ -315,19 +561,21 @@ export default async function MasterPage({
           </div>
         </section>
 
-        <section className="card min-w-0">
-          <h2 className="section-title">
-            Programs needing review ({needsReview.length})
-          </h2>
-          <p className="mt-1 text-xs text-muted">
-            Course codes that are new (not in the official catalog) or unassigned stay importable
-            and filterable under &quot;Unassigned programs&quot; until someone chooses a college
-            here. Nothing is deleted or hidden.
-          </p>
+        <section className="card min-w-0 space-y-3">
+          <div>
+            <h2 className="section-title">
+              Programs needing review ({needsReview.length})
+            </h2>
+            <p className="mt-1 text-xs text-muted">
+              Course codes that are new (not in the official catalog) or unassigned stay importable
+              and filterable under &quot;Unassigned programs&quot; until someone chooses a college
+              here. Nothing is deleted or hidden.
+            </p>
+          </div>
           {needsReview.length === 0 ? (
-            <p className="mt-3 text-sm text-muted">Every program has a confirmed college.</p>
+            <p className="text-sm text-muted">Every program has a confirmed college.</p>
           ) : canManage ? (
-            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="grid gap-2 sm:grid-cols-2">
               {needsReview.map((c) => (
                 <div key={c.id} className="rounded-lg border border-line p-3">
                   <div className="flex items-baseline justify-between gap-2">
@@ -356,7 +604,7 @@ export default async function MasterPage({
               ))}
             </div>
           ) : (
-            <ul className="mt-3 space-y-1 text-sm">
+            <ul className="space-y-1 text-sm">
               {needsReview.map((c) => (
                 <li key={c.id}>
                   <strong>{c.code}</strong> — {c.name ?? "no name"} (Unassigned)

@@ -62,7 +62,7 @@ body {
 
   /* Buttons ----------------------------------------------------------- */
   .btn {
-    @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-line bg-white px-3.5 text-sm font-medium text-navy shadow-sm transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-line bg-white px-3.5 text-sm font-medium text-navy transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
     @apply border-navy bg-navy text-white hover:bg-navy-deep;
@@ -81,7 +81,10 @@ body {
   .input,
   .select,
   .textarea {
-    @apply w-full rounded-lg border border-line bg-white px-3 py-2 text-sm text-ink shadow-sm placeholder:text-slate-400 transition-colors focus-visible:border-navy-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/25 disabled:bg-slate-50 disabled:text-slate-400;
+    @apply w-full h-9 rounded-md border border-line bg-white px-3 text-sm text-ink placeholder:text-slate-400 transition-colors focus-visible:border-navy-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/25 disabled:bg-slate-50 disabled:text-slate-400;
+  }
+  .textarea {
+    @apply h-auto py-2;
   }
   .select {
     @apply pr-8;
@@ -89,7 +92,7 @@ body {
 
   /* Surfaces ---------------------------------------------------------- */
   .card {
-    @apply rounded-xl border border-line bg-white p-4 shadow-sm sm:p-5;
+    @apply rounded-lg border border-line bg-white p-4 sm:p-5;
   }
   .alert {
     @apply flex items-start gap-2 rounded-lg border px-4 py-3 text-sm;
@@ -105,6 +108,15 @@ body {
   }
   .alert-info {
     @apply border-line bg-slate-50 text-ink;
+  }
+  .alert-collapsible {
+    @apply flex items-center gap-2 rounded-md border px-3 py-1.5 text-xs;
+  }
+  .alert-collapsible-warn {
+    @apply border-amber-200 bg-amber-50 text-amber-800;
+  }
+  .alert-collapsible-error {
+    @apply border-red-200 bg-red-50 text-red-700;
   }
 
   /* Tables ------------------------------------------------------------ */
@@ -164,11 +176,54 @@ body {
   html,
   body {
     background: #fff;
+    margin: 0;
+    padding: 0;
   }
   .print-sheet {
+    break-after: page;
+    page-break-after: always;
+    margin: 0 !important;
+    box-shadow: none !important;
+    border: 0 !important;
+  }
+  /* The last sheet must not emit a trailing blank page. */
+  .print-sheet:last-child {
+    break-after: auto;
+    page-break-after: auto;
+  }
+  /* Each printed day starts on a fresh page, even when its last sheet had no
+     forced break. The final day suppresses the trailing blank page. */
+  .print-day {
+    break-after: page;
     page-break-after: always;
   }
-  .print-sheet:last-child {
+  .print-day:last-of-type {
+    break-after: auto;
     page-break-after: auto;
+  }
+  /* Repeat column headings on every printed page and never split a row. */
+  thead {
+    display: table-header-group;
+  }
+  tfoot {
+    display: table-footer-group;
+  }
+  tr,
+  img,
+  svg {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+  h1,
+  h2,
+  h3 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+  .data-table tbody tr:hover {
+    background: transparent;
+  }
+  a[href]::after {
+    content: "";
   }
 }
