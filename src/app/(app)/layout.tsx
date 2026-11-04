@@ -21,6 +21,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     items.push({ href: "/schedule", label: "Schedule" });
   if (hasPermission(user, PERMISSIONS.FACULTY_VIEW))
     items.push({ href: "/master", label: "Master Data" });
+  if (hasPermission(user, PERMISSIONS.FACULTY_VIEW))
+    items.push({ href: "/departments", label: "Departments" });
   if (hasPermission(user, PERMISSIONS.CALENDAR_MANAGE))
     items.push({ href: "/calendar", label: "Calendar" });
   if (hasPermission(user, PERMISSIONS.SUMMARY_VIEW))

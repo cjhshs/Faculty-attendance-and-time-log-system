@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser, hasPermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
-import { commitPlan, type ImportPlan, type ImportScope } from "@/lib/import";
+import { commitPlan, AmbiguousFacultyError, type ImportPlan, type ImportScope } from "@/lib/import";
 import { parseTerm, isValidTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
@@ -39,6 +39,17 @@ export async function POST(request: Request) {
   const college = String(form.get("college") ?? "").trim();
   const program = String(form.get("program") ?? "").trim();
   const confirmDuplicate = String(form.get("confirmDuplicate") ?? "") === "1";
+  const reprocessOnly = String(form.get("reprocessOnly") ?? "") === "1";
+
+  let facultyAssignments: Record<string, number> = {};
+  try {
+    facultyAssignments = parseFacultyAssignments(form.get("facultyAssignments"));
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Invalid faculty assignments." },
+      { status: 400 },
+    );
+  }
 
   try {
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -103,6 +114,8 @@ export async function POST(request: Request) {
         filename: file.name,
         importedById: user.id,
         checksum,
+        facultyAssignments,
+        reprocessOnly,
       },
       scope,
     );
@@ -114,21 +127,58 @@ export async function POST(request: Request) {
     const scopeLabel = program || college ? ` (${program || college})` : " (all colleges)";
     await writeAudit(
       user.id,
-      "schedule.import",
-      `Imported ${file.name}${termLabel}${scopeLabel}: ${result.created} added, ${result.updated} updated, ${result.unchanged} unchanged, ${result.skippedOutOfScope} outside scope.${result.batchId ? ` Batch #${result.batchId}.` : ""}${
-        mismatches ? ` Term mismatch warning: ${mismatches}` : ""
-      }`,
+      reprocessOnly ? "schedule.reprocess" : "schedule.import",
+      `${
+        reprocessOnly ? "Reprocessed" : "Imported"
+      } ${file.name}${termLabel}${scopeLabel}: ${result.created} added, ${result.updated} updated, ${
+        result.unchanged
+      } unchanged, ${result.skippedOutOfScope} outside scope${
+        reprocessOnly ? `, ${result.skippedNew} new slot(s) skipped` : ""
+      }, ${result.ambiguousUnlinked} ambiguous instructor link(s) left unlinked.${
+        result.batchId ? ` Batch #${result.batchId}.` : ""
+      }${mismatches ? ` Term mismatch warning: ${mismatches}` : ""}`,
     );
     return NextResponse.json({
       result,
       termWarning: mismatches || null,
     });
   } catch (error) {
+    if (error instanceof AmbiguousFacultyError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code, entries: error.entries },
+        { status: 409 },
+      );
+    }
     return NextResponse.json(
       { error: error instanceof Error ? error.message : "Import failed. No changes were saved." },
       { status: 400 },
     );
   }
+}
+
+// The import UI sends one JSON object: normalized instructor name -> faculty id.
+// Only positive integer ids are accepted; anything else is rejected before the
+// write transaction opens.
+function parseFacultyAssignments(raw: FormDataEntryValue | null): Record<string, number> {
+  if (typeof raw !== "string" || !raw.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error("Faculty assignments were not valid JSON.");
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new Error("Faculty assignments must be an object.");
+  }
+  const result: Record<string, number> = {};
+  for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+    const id = Number(value);
+    if (!key.trim() || !Number.isInteger(id) || id <= 0) {
+      throw new Error("Each faculty assignment must use a positive faculty id.");
+    }
+    result[key] = id;
+  }
+  return result;
 }
 
 function termMismatches(

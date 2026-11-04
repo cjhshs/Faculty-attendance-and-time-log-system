@@ -10,6 +10,12 @@ import {
   groupSuggestionsByCollege,
   planAutoDepartmentAssignments,
 } from "@/lib/faculty-auto-department";
+import {
+  applyInitialCetRoster,
+  changeFacultyDepartment,
+  clearFacultyDepartment,
+} from "@/lib/department-membership";
+import { INITIAL_CET_ROSTER } from "@/lib/faculty-membership";
 
 export type ActionResult = { ok: boolean; message: string };
 
@@ -47,8 +53,9 @@ export async function createFaculty(formData: FormData): Promise<ActionResult> {
 }
 
 // Assign (or clear) a faculty member's official department. Only this roster
-// field decides attendance membership; the programs they teach never do. A
-// change is audited and never rewrites schedules or attendance.
+// field decides attendance membership; the programs they teach never do. The
+// change and its audit row are written in one transaction and never rewrite
+// schedules or attendance.
 export async function updateFacultyDepartment(formData: FormData): Promise<ActionResult> {
   const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
   const id = Number(formData.get("id"));
@@ -60,27 +67,63 @@ export async function updateFacultyDepartment(formData: FormData): Promise<Actio
     return { ok: false, message: "Invalid department." };
   }
 
-  const [faculty, college] = await Promise.all([
-    prisma.faculty.findUnique({ where: { id } }),
-    departmentId ? prisma.college.findUnique({ where: { id: departmentId } }) : Promise.resolve(null),
-  ]);
-  if (!faculty) return { ok: false, message: "Faculty not found." };
-  if (departmentId !== null && !college) return { ok: false, message: "Department not found." };
+  const result = await changeFacultyDepartment({
+    facultyId: id,
+    departmentId,
+    actorId: user.id,
+  });
+  if (!result.ok) return { ok: false, message: result.message };
 
-  await prisma.faculty.update({ where: { id }, data: { departmentId } });
-  await writeAudit(
-    user.id,
-    "faculty.department",
-    `${faculty.fullName} department set to ${college ? college.code : "unassigned"}`,
-  );
   revalidatePath("/master");
+  revalidatePath("/departments");
   revalidatePath("/attendance/encode");
   revalidatePath("/attendance/print");
   revalidatePath("/summary");
-  return {
-    ok: true,
-    message: `${faculty.fullName} assigned to ${college ? `${college.code} — ${college.name}` : "No department"}.`,
-  };
+  return { ok: true, message: result.message };
+}
+
+// Explicitly remove a faculty member from a department. The faculty row, every
+// historical schedule and every attendance record are preserved; only the
+// roster membership field is cleared. The action is audited inside the same
+// transaction as the update.
+export async function removeFacultyDepartment(formData: FormData): Promise<ActionResult> {
+  const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
+  const id = Number(formData.get("id"));
+  if (!id) return { ok: false, message: "Faculty is required." };
+  const confirmed = String(formData.get("confirm") || "") === "1";
+
+  const result = await clearFacultyDepartment({
+    facultyId: id,
+    actorId: user.id,
+    confirmed,
+  });
+  if (!result.ok) return { ok: false, message: result.message };
+
+  revalidatePath("/master");
+  revalidatePath("/departments");
+  revalidatePath("/attendance/encode");
+  revalidatePath("/attendance/print");
+  revalidatePath("/summary");
+  return { ok: true, message: result.message };
+}
+
+// Apply the explicit, documented initial CET roster. Only names already on the
+// roster are assigned; unknown or duplicate names are reported, never created or
+// guessed. This is idempotent and safe to run again.
+export async function initializeCetRoster(): Promise<ActionResult> {
+  const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
+  const result = await applyInitialCetRoster({
+    actorId: user.id,
+    candidates: INITIAL_CET_ROSTER,
+    departmentCode: "CET",
+  });
+
+  revalidatePath("/master");
+  revalidatePath("/departments");
+  revalidatePath("/attendance/encode");
+  revalidatePath("/attendance/print");
+  revalidatePath("/summary");
+  return { ok: result.ok, message: result.message };
 }
 
 // Bulk-assign a reviewed set of roster rows to one department. Rows that already
@@ -119,19 +162,25 @@ export async function assignFacultyDepartmentBulk(formData: FormData): Promise<A
   const skipped = rows.length - targets.length;
 
   if (targets.length > 0) {
-    await prisma.faculty.updateMany({
-      where: { id: { in: targets.map((row) => row.id) } },
-      data: { departmentId },
+    await prisma.$transaction(async (tx) => {
+      await tx.faculty.updateMany({
+        where: { id: { in: targets.map((row) => row.id) } },
+        data: { departmentId },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: "faculty.department.bulk",
+          details:
+            `Bulk assigned ${targets.length} faculty to ${college.code}.` +
+            (skipped ? ` Skipped ${skipped} with an existing department.` : ""),
+        },
+      });
     });
-    await writeAudit(
-      user.id,
-      "faculty.department.bulk",
-      `Bulk assigned ${targets.length} faculty to ${college.code}.` +
-        (skipped ? ` Skipped ${skipped} with an existing department.` : ""),
-    );
   }
 
   revalidatePath("/master");
+  revalidatePath("/departments");
   revalidatePath("/attendance/encode");
   revalidatePath("/attendance/print");
   revalidatePath("/summary");

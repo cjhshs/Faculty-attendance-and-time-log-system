@@ -2,6 +2,12 @@
 import { prisma } from "@/lib/prisma";
 import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/lib/schedule-parser";
 import { facultyNameKey, nameSimilarity, type RosterFaculty } from "@/lib/faculty-department";
+import {
+  resolveInstructorLink,
+  scheduleSlotKey,
+  splitReprocessSlots,
+  unresolvedAmbiguousReviews,
+} from "@/lib/faculty-membership";
 import { normalizeSemester } from "@/lib/terms";
 import { timeToMinutes, WEEKDAY_NAMES } from "@/lib/dates";
 import { programNameFor } from "@/lib/program-names";
@@ -210,6 +216,9 @@ export type FacultyReviewCandidate = {
 };
 
 export type FacultyReviewEntry = {
+  // Normalized instructor name. The import UI uses this stable key when an
+  // administrator explicitly resolves an ambiguous duplicate name.
+  key: string;
   name: string;
   kind: FacultyReviewKind;
   rows: number[];
@@ -526,7 +535,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const existingByKey = new Map(
     ctx.existingSlots.map((s) => {
       const roomCode = roomById.get(s.roomId)?.code ?? "";
-      return [`${s.cn}|${s.weekday}|${s.startTime}|${s.endTime}|${roomCode.toUpperCase()}`, s];
+      return [scheduleSlotKey(s.cn, s.weekday, s.startTime, s.endTime, roomCode), s];
     }),
   );
 
@@ -672,7 +681,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
 
     for (const meeting of meetings) {
       for (const weekday of meeting.weekdays) {
-        const key = `${cn}|${weekday}|${meeting.start}|${meeting.end}|${meeting.roomCode.toUpperCase()}`;
+        const key = scheduleSlotKey(cn, weekday, meeting.start, meeting.end, meeting.roomCode);
         const messages: string[] = [];
         if (seenSlotKeys.has(key)) {
           warnings.push({
@@ -737,8 +746,8 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   }));
   const facultyReview: FacultyReviewEntry[] = [];
   for (const usage of instructorUsage.values()) {
-    const target = facultyNameKey(usage.name);
-    const exact = roster.filter((f) => facultyNameKey(f.fullName) === target);
+    const usageKey = facultyNameKey(usage.name);
+    const exact = roster.filter((f) => facultyNameKey(f.fullName) === usageKey);
     const candidates: FacultyReviewCandidate[] = exact.map((f) => ({
       facultyId: f.id,
       fullName: f.fullName,
@@ -768,6 +777,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
     }
     if (!kind) continue;
     facultyReview.push({
+      key: usageKey,
       name: usage.name,
       kind,
       rows: Array.from(usage.rows).sort((a, b) => a - b),
@@ -1035,10 +1045,41 @@ export type CommitResult = {
   roomsCreated: number;
   errors: number;
   skippedOutOfScope: number;
+  // Reprocess mode only: new slots that were deliberately not created.
+  skippedNew: number;
+  // Slots whose instructor matched several roster rows and was left unlinked
+  // because no explicit administrator choice was supplied.
+  ambiguousUnlinked: number;
   batchId: number | null;
 };
 
-export type ImportBatchMeta = { filename?: string; importedById?: number; checksum?: string | null };
+export type ImportBatchMeta = {
+  filename?: string;
+  importedById?: number;
+  checksum?: string | null;
+  // Normalized instructor name -> explicit faculty id chosen by an administrator.
+  // This is the only way an ambiguous duplicate name is linked.
+  facultyAssignments?: Record<string, number>;
+  // When true, existing slots may be updated but new slots are never created.
+  reprocessOnly?: boolean;
+};
+
+// Raised before anything is written when an instructor name matches more than
+// one roster row. The UI must ask the administrator to pick the correct record.
+export class AmbiguousFacultyError extends Error {
+  readonly code = "AMBIGUOUS_FACULTY";
+  readonly entries: FacultyReviewEntry[];
+
+  constructor(entries: FacultyReviewEntry[]) {
+    super(
+      `${entries.length} instructor name${
+        entries.length === 1 ? "" : "s"
+      } match more than one faculty record. Choose the correct faculty member before importing; nothing was written.`,
+    );
+    this.name = "AmbiguousFacultyError";
+    this.entries = entries;
+  }
+}
 
 export async function commitPlan(
   buffer: Buffer,
@@ -1050,6 +1091,17 @@ export async function commitPlan(
   if (plan.missingColumns.length > 0) {
     throw new Error(`Missing required columns: ${plan.missingColumns.join(", ")}`);
   }
+
+  // Duplicate roster names must be resolved by a human. We refuse to guess or
+  // silently pick the first row, and we do this before opening the write
+  // transaction so a rejected import leaves no partial data. An explicit choice
+  // is only accepted when it points at one of that name's candidate rows.
+  const unresolved = unresolvedAmbiguousReviews(
+    plan.facultyReview,
+    meta?.facultyAssignments,
+  );
+  if (unresolved.length > 0) throw new AmbiguousFacultyError(unresolved);
+
   const result = await writePlan(plan, target, meta, scope);
   return { plan, result };
 }
@@ -1068,7 +1120,9 @@ export async function writePlan(
 
   // The plan is always validated over the whole file; the scope only narrows
   // what is written. This keeps cross-department instructor checks intact.
-  const slotsToWrite = scope ? plan.slots.filter((s) => slotInScope(s.courseCode, scope)) : plan.slots;
+  const scopedSlots = scope
+    ? plan.slots.filter((s) => slotInScope(s.courseCode, scope))
+    : plan.slots;
 
   const result: CommitResult = {
     created: 0,
@@ -1078,19 +1132,56 @@ export async function writePlan(
     programsCreated: 0,
     roomsCreated: 0,
     errors: plan.errors.length,
-    skippedOutOfScope: plan.slots.length - slotsToWrite.length,
+    skippedOutOfScope: plan.slots.length - scopedSlots.length,
+    skippedNew: 0,
+    ambiguousUnlinked: 0,
     batchId: null,
   };
 
-  // Only bother tracking a batch when a target term is known and the file will
-  // actually create or update at least one slot. Unchanged/error rows keep
-  // whatever batch they already belonged to.
-  const willWrite = slotsToWrite.some((s) => s.status === "new" || s.status === "update");
-
   await prisma.$transaction(
     async (tx) => {
-      // Import batch — lets a single upload be identified and cleared later,
-      // without touching manually created or previously imported schedules.
+      // One canonical key for an existing meeting. Room codes are used instead
+      // of ids so the key is stable before rooms are created. Every write path
+      // (import, reprocess, repair) matches on this key, so the same class is
+      // updated in place and can never be inserted twice.
+      const existingRows = await tx.scheduleSlot.findMany({
+        where: target
+          ? { schoolYear: target.schoolYear, semester: target.semester }
+          : undefined,
+        select: {
+          id: true,
+          cn: true,
+          weekday: true,
+          startTime: true,
+          endTime: true,
+          facultyId: true,
+          room: { select: { code: true } },
+        },
+      });
+      const existingByKey = new Map<string, { id: number; facultyId: number | null }>();
+      for (const row of existingRows) {
+        existingByKey.set(
+          scheduleSlotKey(row.cn, row.weekday, row.startTime, row.endTime, row.room.code),
+          { id: row.id, facultyId: row.facultyId },
+        );
+      }
+
+      // Reprocess mode is intentionally conservative: it may update meetings
+      // that already exist in the target term but never creates a new slot.
+      // This is the safe path after a department membership change.
+      let slotsToWrite = scopedSlots;
+      if (meta?.reprocessOnly) {
+        const split = splitReprocessSlots(scopedSlots, new Set(existingByKey.keys()));
+        slotsToWrite = split.toWrite;
+        result.skippedNew = split.skipped.length;
+      }
+
+      // Only bother tracking a batch when a target term is known and the file
+      // will actually create or update at least one slot. Unchanged/error rows
+      // keep whatever batch they already belonged to.
+      const willWrite = slotsToWrite.some(
+        (s) => s.status === "new" || s.status === "update",
+      );
       let batchId: number | null = null;
       if (target && willWrite) {
         const batch = await tx.importBatch.create({
@@ -1105,145 +1196,165 @@ export async function writePlan(
         batchId = batch.id;
       }
 
-    // Programs. New programs get their official name and college from the
-    // catalog; existing rows are only filled in where they are still blank, so
-    // an administrator's assignment is never overwritten.
-    const courseCodes = Array.from(new Set(slotsToWrite.map((s) => s.courseCode)));
-    const mappingByCode = new Map(plan.programMapping.map((m) => [m.code, m]));
-    const courseMap = new Map<string, number>();
-    for (const code of courseCodes) {
-      const program = programForCode(code);
-      const mapping = mappingByCode.get(code);
-      const name = program?.name ?? programNameFor(code);
-      const sourceCode = mapping?.sourceCodes[0] ?? code;
-      const college = program?.college
-        ? await tx.college.findUnique({ where: { code: program.college }, select: { id: true } })
-        : null;
-      const existing = await tx.course.findUnique({ where: { code } });
-      if (existing) {
-        const data: { name?: string; collegeId?: number; sourceCode?: string } = {};
-        if (!existing.name && name) data.name = name;
-        if (existing.collegeId == null && college) data.collegeId = college.id;
-        if (!existing.sourceCode) data.sourceCode = sourceCode;
-        if (Object.keys(data).length > 0) {
-          await tx.course.update({ where: { id: existing.id }, data });
-        }
-        courseMap.set(code, existing.id);
-      } else {
-        const created = await tx.course.create({
-          data: {
-            code,
-            name,
-            collegeId: college?.id ?? null,
-            sourceCode,
-            official: program?.official ?? true,
-          },
-        });
-        courseMap.set(code, created.id);
-        result.programsCreated++;
-      }
-    }
-
-    // Rooms
-    const roomCodes = Array.from(new Set(slotsToWrite.map((s) => s.roomCode.toUpperCase())));
-    const roomMap = new Map<string, number>();
-    for (const code of roomCodes) {
-      const existing = await tx.room.findUnique({ where: { code } });
-      if (existing) {
-        roomMap.set(code, existing.id);
-      } else {
-        const type = slotsToWrite.find((s) => s.roomCode.toUpperCase() === code)?.roomType ?? "PHYSICAL";
-        const created = await tx.room.create({ data: { code, type } });
-        roomMap.set(code, created.id);
-        result.roomsCreated++;
-      }
-    }
-
-    // Faculty
-    const facultyNames = Array.from(
-      new Set(slotsToWrite.map((s) => s.facultyName).filter((n): n is string => !!n)),
-    );
-    const facultyMap = new Map<string, number>();
-    for (const name of facultyNames) {
-      const existing = await tx.faculty.findFirst({
-        where: { fullName: { equals: name, mode: "insensitive" } },
-      });
-      if (existing) {
-        facultyMap.set(nameKey(name), existing.id);
-      } else {
-        const created = await tx.faculty.create({ data: { fullName: name, surname: surnameOf(name) } });
-        facultyMap.set(nameKey(name), created.id);
-        result.facultyCreated++;
-      }
-    }
-
-    // Slots. Every slot in the file is matched against the term's existing
-    // rows in one query, then the loop only touches local state — a large
-    // consolidated workbook (thousands of meetings) no longer times out.
-    const slotKey = (cn: string, weekday: number, start: string, end: string, roomId: number) =>
-      `${cn}\u0000${weekday}\u0000${start}\u0000${end}\u0000${roomId}`;
-    const existingSlots = await tx.scheduleSlot.findMany({
-      where: target
-        ? { schoolYear: target.schoolYear, semester: target.semester }
-        : undefined,
-      select: { id: true, cn: true, weekday: true, startTime: true, endTime: true, roomId: true },
-    });
-    const existingByKey = new Map<string, number>();
-    for (const row of existingSlots) {
-      existingByKey.set(
-        slotKey(row.cn, row.weekday, row.startTime, row.endTime, row.roomId),
-        row.id,
-      );
-    }
-
-    for (const slot of slotsToWrite) {
-      const courseId = courseMap.get(slot.courseCode)!;
-      const roomId = roomMap.get(slot.roomCode.toUpperCase())!;
-      const facultyId = slot.facultyName ? facultyMap.get(nameKey(slot.facultyName)) ?? null : null;
-
-      const key = slotKey(slot.cn, slot.weekday, slot.start, slot.end, roomId);
-      const existingId = existingByKey.get(key);
-      const data = {
-        cn: slot.cn,
-        subject: slot.subject,
-        description: slot.description,
-        units: slot.units,
-        section: slot.section,
-        yearLevel: slot.yearLevel,
-        courseId,
-        facultyId,
-        termType: slot.termType,
-        semester: target?.semester ?? slot.semester,
-        schoolYear: target?.schoolYear ?? slot.schoolYear,
-        weekday: slot.weekday,
-        startTime: slot.start,
-        endTime: slot.end,
-        roomId,
-        mode: slot.mode,
-        importBatchId: batchId,
-      };
-
-      if (existingId !== undefined) {
-        if (slot.status === "unchanged") {
-          result.unchanged++;
+      // Programs. New programs get their official name and college from the
+      // catalog; existing rows are only filled in where they are still blank, so
+      // an administrator's assignment is never overwritten.
+      const courseCodes = Array.from(new Set(slotsToWrite.map((s) => s.courseCode)));
+      const mappingByCode = new Map(plan.programMapping.map((m) => [m.code, m]));
+      const courseMap = new Map<string, number>();
+      for (const code of courseCodes) {
+        const program = programForCode(code);
+        const mapping = mappingByCode.get(code);
+        const name = program?.name ?? programNameFor(code);
+        const sourceCode = mapping?.sourceCodes[0] ?? code;
+        const college = program?.college
+          ? await tx.college.findUnique({ where: { code: program.college }, select: { id: true } })
+          : null;
+        const existing = await tx.course.findUnique({ where: { code } });
+        if (existing) {
+          const data: { name?: string; collegeId?: number; sourceCode?: string } = {};
+          if (!existing.name && name) data.name = name;
+          if (existing.collegeId == null && college) data.collegeId = college.id;
+          if (!existing.sourceCode) data.sourceCode = sourceCode;
+          if (Object.keys(data).length > 0) {
+            await tx.course.update({ where: { id: existing.id }, data });
+          }
+          courseMap.set(code, existing.id);
         } else {
-          await tx.scheduleSlot.update({ where: { id: existingId }, data });
-          result.updated++;
+          const created = await tx.course.create({
+            data: {
+              code,
+              name,
+              collegeId: college?.id ?? null,
+              sourceCode,
+              official: program?.official ?? true,
+            },
+          });
+          courseMap.set(code, created.id);
+          result.programsCreated++;
         }
-      } else {
-        const created = await tx.scheduleSlot.create({ data, select: { id: true } });
-        existingByKey.set(key, created.id);
-        result.created++;
       }
-    }
 
-    if (batchId) {
-      await tx.importBatch.update({
-        where: { id: batchId },
-        data: { slotCount: result.created + result.updated },
+      // Rooms
+      const roomCodes = Array.from(new Set(slotsToWrite.map((s) => s.roomCode.toUpperCase())));
+      const roomMap = new Map<string, number>();
+      for (const code of roomCodes) {
+        const existing = await tx.room.findUnique({ where: { code } });
+        if (existing) {
+          roomMap.set(code, existing.id);
+        } else {
+          const type =
+            slotsToWrite.find((s) => s.roomCode.toUpperCase() === code)?.roomType ?? "PHYSICAL";
+          const created = await tx.room.create({ data: { code, type } });
+          roomMap.set(code, created.id);
+          result.roomsCreated++;
+        }
+      }
+
+      // Faculty. Matching is done on the same normalized key as the parser, not
+      // on an exact case-insensitive string, so formatting differences cannot
+      // create a second roster row. A name matching several rows is left
+      // unlinked unless an administrator explicitly chose one.
+      const roster = await tx.faculty.findMany({
+        select: { id: true, fullName: true, departmentId: true },
       });
-      result.batchId = batchId;
-    }
+      const rosterRows = roster.map((row) => ({
+        id: row.id,
+        fullName: row.fullName,
+        departmentCode: null,
+      }));
+      const facultyNamesByKey = new Map<string, string>();
+      for (const slot of slotsToWrite) {
+        if (!slot.facultyName) continue;
+        const key = facultyNameKey(slot.facultyName);
+        if (!facultyNamesByKey.has(key)) facultyNamesByKey.set(key, slot.facultyName);
+      }
+      const facultyMap = new Map<string, number>();
+      for (const [key, name] of facultyNamesByKey) {
+        const link = resolveInstructorLink(name, rosterRows, meta?.facultyAssignments);
+        if (link.kind === "linked") {
+          facultyMap.set(key, link.facultyId);
+        } else if (link.kind === "create") {
+          // Reprocessing never creates a faculty row either. If the name is
+          // still unknown, the existing slot keeps its current link below.
+          if (meta?.reprocessOnly) continue;
+          const created = await tx.faculty.create({
+            data: { fullName: name, surname: surnameOf(name) },
+          });
+          facultyMap.set(key, created.id);
+          result.facultyCreated++;
+          rosterRows.push({ id: created.id, fullName: name, departmentCode: null });
+        } else {
+          // Ambiguous duplicate name or an explicit choice that no longer
+          // exists. Never guess: the slot keeps its class data but has no
+          // faculty link, and the count is reported back for review.
+          result.ambiguousUnlinked++;
+        }
+      }
+
+      for (const slot of slotsToWrite) {
+        const courseId = courseMap.get(slot.courseCode)!;
+        const roomId = roomMap.get(slot.roomCode.toUpperCase())!;
+        const key = scheduleSlotKey(slot.cn, slot.weekday, slot.start, slot.end, slot.roomCode);
+        const existing = existingByKey.get(key);
+        const existingId = existing?.id;
+        const nameKey = slot.facultyName ? facultyNameKey(slot.facultyName) : null;
+        let facultyId: number | null;
+        if (nameKey && facultyMap.has(nameKey)) {
+          facultyId = facultyMap.get(nameKey)!;
+        } else if (meta?.reprocessOnly && existing) {
+          // Preserve the existing link instead of unlinking history when a
+          // name is unresolved and no explicit choice was supplied.
+          facultyId = existing.facultyId;
+        } else {
+          facultyId = null;
+        }
+
+        const data = {
+          cn: slot.cn,
+          subject: slot.subject,
+          description: slot.description,
+          units: slot.units,
+          section: slot.section,
+          yearLevel: slot.yearLevel,
+          courseId,
+          facultyId,
+          termType: slot.termType,
+          semester: target?.semester ?? slot.semester,
+          schoolYear: target?.schoolYear ?? slot.schoolYear,
+          weekday: slot.weekday,
+          startTime: slot.start,
+          endTime: slot.end,
+          roomId,
+          mode: slot.mode,
+          importBatchId: batchId,
+        };
+
+        if (existingId !== undefined) {
+          if (slot.status === "unchanged") {
+            result.unchanged++;
+          } else {
+            await tx.scheduleSlot.update({ where: { id: existingId }, data });
+            result.updated++;
+          }
+        } else if (meta?.reprocessOnly) {
+          // Selected before the transaction, but the row disappeared or the
+          // room changed. Do not create a duplicate during a reprocess.
+          result.skippedNew++;
+        } else {
+          const created = await tx.scheduleSlot.create({ data, select: { id: true } });
+          existingByKey.set(key, { id: created.id, facultyId });
+          result.created++;
+        }
+      }
+
+      if (batchId) {
+        await tx.importBatch.update({
+          where: { id: batchId },
+          data: { slotCount: result.created + result.updated },
+        });
+        result.batchId = batchId;
+      }
     },
     { maxWait: 15000, timeout: 180000 },
   );

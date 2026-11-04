@@ -62,6 +62,10 @@ export function ImportClient({
   const [duplicateImport, setDuplicateImport] = useState<DuplicateImport | null>(null);
   const [termWarning, setTermWarning] = useState<string | null>(null);
   const [previewPeriod, setPreviewPeriod] = useState<PeriodOption | null>(null);
+  // Explicit administrator choices for duplicate roster names, keyed by the
+  // normalized instructor name from the preview. Empty until a human chooses.
+  const [facultyAssignments, setFacultyAssignments] = useState<Record<string, number>>({});
+  const [reprocessOnly, setReprocessOnly] = useState(false);
 
   function resetPreview() {
     setPlan(null);
@@ -70,6 +74,7 @@ export function ImportClient({
     setDuplicateImport(null);
     setTermWarning(null);
     setPreviewPeriod(null);
+    setFacultyAssignments({});
   }
 
   function buildBody(confirmDuplicate = false) {
@@ -80,6 +85,10 @@ export function ImportClient({
     if (scopeCollege) body.append("college", scopeCollege);
     if (scopeProgram) body.append("program", scopeProgram);
     if (confirmDuplicate) body.append("confirmDuplicate", "1");
+    if (reprocessOnly) body.append("reprocessOnly", "1");
+    if (Object.keys(facultyAssignments).length > 0) {
+      body.append("facultyAssignments", JSON.stringify(facultyAssignments));
+    }
     return body;
   }
 
@@ -123,9 +132,28 @@ export function ImportClient({
       if (!ok) return;
       forceDuplicate = true;
     }
+    const unresolved = plan
+      ? plan.facultyReview.filter(
+          (entry) =>
+            entry.kind === "ambiguous" &&
+            !entry.candidates.some(
+              (candidate) => candidate.facultyId === facultyAssignments[entry.key],
+            ),
+        ).length
+      : 0;
+    if (unresolved > 0) {
+      setError(
+        `Resolve ${unresolved} ambiguous instructor name${
+          unresolved === 1 ? "" : "s"
+        } before importing. Use the "Choose the correct faculty member" selector in the Instructor review section. Nothing was saved.`,
+      );
+      return;
+    }
     if (
       !window.confirm(
-        `Import ${scopeLabel} from this file into ${termLabel}? Existing schedules in that semester are updated, never deleted. Attendance is not affected. Conflicts are always checked across every department in the file.`,
+        reprocessOnly
+          ? `Reprocess ${scopeLabel} from this file into ${termLabel}? Only meetings that already exist in this semester are updated. No new slots and no attendance records are written.`
+          : `Import ${scopeLabel} from this file into ${termLabel}? Existing schedules in that semester are updated, never deleted. Attendance is not affected. Conflicts are always checked across every department in the file.`,
       )
     )
       return;
@@ -309,11 +337,18 @@ export function ImportClient({
 
       {result ? (
         <div className="alert alert-success">
-          Import complete into {schoolYear.trim()} {semester}: {result.created} added,{" "}
-          {result.updated} updated, {result.unchanged} unchanged. {result.facultyCreated} new
-          faculty, {result.programsCreated} new program(s), {result.roomsCreated} new room(s).
+          {reprocessOnly ? "Reprocess" : "Import"} complete into {schoolYear.trim()} {semester}:{" "}
+          {result.created} added, {result.updated} updated, {result.unchanged} unchanged.{" "}
+          {result.facultyCreated} new faculty, {result.programsCreated} new program(s),{" "}
+          {result.roomsCreated} new room(s).
+          {result.skippedNew > 0
+            ? ` ${result.skippedNew} new slot(s) were skipped because reprocessing never creates new meetings.`
+            : ""}
           {result.skippedOutOfScope > 0
             ? ` ${result.skippedOutOfScope} slot(s) left untouched because they are outside the selected college/course.`
+            : ""}
+          {result.ambiguousUnlinked > 0
+            ? ` ${result.ambiguousUnlinked} instructor link(s) were left unlinked because the name matches more than one faculty record; resolve them and import again.`
             : ""}
           {result.batchId ? ` Recorded as import batch #${result.batchId}.` : ""}
           {result.errors > 0 ? ` ${result.errors} row(s) were skipped.` : ""}
@@ -333,6 +368,17 @@ export function ImportClient({
             setScopeProgram("");
           }}
           onProgramChange={setScopeProgram}
+          facultyAssignments={facultyAssignments}
+          onFacultyAssignment={(key, facultyId) =>
+            setFacultyAssignments((current) => {
+              const next = { ...current };
+              if (facultyId == null) delete next[key];
+              else next[key] = facultyId;
+              return next;
+            })
+          }
+          reprocessOnly={reprocessOnly}
+          onReprocessChange={setReprocessOnly}
         />
       ) : null}
 
@@ -394,6 +440,10 @@ function PlanView({
   scopeProgram,
   onCollegeChange,
   onProgramChange,
+  facultyAssignments,
+  onFacultyAssignment,
+  reprocessOnly,
+  onReprocessChange,
 }: {
   plan: ImportPlan;
   onConfirm: () => void;
@@ -403,6 +453,10 @@ function PlanView({
   scopeProgram: string;
   onCollegeChange: (value: string) => void;
   onProgramChange: (value: string) => void;
+  facultyAssignments: Record<string, number>;
+  onFacultyAssignment: (key: string, facultyId: number | null) => void;
+  reprocessOnly: boolean;
+  onReprocessChange: (value: boolean) => void;
 }) {
   const s = plan.summary;
   const collegeNames = new Map<string, string>();
@@ -423,9 +477,16 @@ function PlanView({
   const scopeMapping = plan.programMapping.filter(inScope);
   const scopeCodes = new Set(scopeMapping.map((m) => m.code));
   const scopeSlots = plan.slots.filter((slot) => scopeCodes.has(slot.courseCode));
-  const scopeChanges = scopeSlots.filter(
-    (slot) => slot.status === "new" || slot.status === "update",
-  ).length;
+  const scopeNewSlots = scopeSlots.filter((slot) => slot.status === "new");
+  const scopeUpdatedSlots = scopeSlots.filter((slot) => slot.status === "update");
+  // Reprocessing never creates a slot, so only updates to already-existing
+  // meetings count as changes. The button stays disabled when there is nothing
+  // safe to write.
+  const scopeChanges = reprocessOnly ? scopeUpdatedSlots.length : scopeNewSlots.length + scopeUpdatedSlots.length;
+  const ambiguousEntries = plan.facultyReview.filter((entry) => entry.kind === "ambiguous");
+  const unresolvedAmbiguous = ambiguousEntries.filter(
+    (entry) => !entry.candidates.some((candidate) => candidate.facultyId === facultyAssignments[entry.key]),
+  );
   const scopeRows = scopeMapping.reduce((n, m) => n + m.rows, 0);
   const scopeLabel = scopeProgram
     ? scopeProgram
@@ -537,13 +598,37 @@ function PlanView({
             </select>
           </div>
         </div>
+        <label className="flex items-start gap-2 rounded-lg border border-line bg-slate-50 px-3 py-2 text-xs">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={reprocessOnly}
+            onChange={(e) => onReprocessChange(e.target.checked)}
+          />
+          <span>
+            <strong className="text-navy">Reprocess existing slots only.</strong> Update meetings that
+            already exist in this period from the current roster; never create a new slot, never
+            touch attendance, and keep the import history. Use this after changing department
+            membership so future imports and existing schedules use the corrected link.
+          </span>
+        </label>
         <p className="text-xs">
           <strong>Scope:</strong> {scopeLabel} · {scopeMapping.length} program
           {scopeMapping.length === 1 ? "" : "s"} · {scopeRows} source row
           {scopeRows === 1 ? "" : "s"} · {scopeSlots.length} slot
           {scopeSlots.length === 1 ? "" : "s"} ·{" "}
           <strong>{scopeChanges} change{scopeChanges === 1 ? "" : "s"} to write</strong>
+          {reprocessOnly && scopeNewSlots.length > 0
+            ? ` · ${scopeNewSlots.length} new slot(s) will be skipped`
+            : ""}
         </p>
+        {unresolvedAmbiguous.length > 0 ? (
+          <p className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
+            {unresolvedAmbiguous.length} ambiguous instructor name
+            {unresolvedAmbiguous.length === 1 ? "" : "s"} must be resolved in the Instructor review
+            section before this import can be confirmed.
+          </p>
+        ) : null}
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
@@ -654,9 +739,9 @@ function PlanView({
           <p className="mb-2 text-xs text-muted">
             These instructor names could not be matched safely to one registered faculty member. No
             department was guessed from the course code, subject or student program. Unknown names
-            may be new hires or typos; ambiguous names match more than one roster row; a roster match
-            without a department must be assigned on Master Data before it appears in a department
-            attendance sheet.
+            may be new hires or typos; ambiguous names match more than one roster row and must be
+            resolved here; a roster match without a department must be assigned on the Departments
+            page before it appears in a department attendance sheet.
           </p>
           <div className="max-h-80 overflow-auto">
             <table className="data-table">
@@ -667,6 +752,7 @@ function PlanView({
                   <th scope="col">Rows</th>
                   <th scope="col">Programs</th>
                   <th scope="col">Possible roster match</th>
+                  <th scope="col">Resolution</th>
                 </tr>
               </thead>
               <tbody>
@@ -691,9 +777,57 @@ function PlanView({
                         entry.candidates
                           .map(
                             (c) =>
-                              `${c.fullName} (${c.departmentCode ?? "no department"})`,
+                              `${c.fullName} (#${c.facultyId}, ${c.departmentCode ?? "no department"})`,
                           )
                           .join("; ")
+                      )}
+                    </td>
+                    <td>
+                      {entry.kind === "ambiguous" ? (
+                        <div className="space-y-1">
+                          <select
+                            className="input h-8 w-64 px-1 py-0.5 text-xs"
+                            aria-label={`Choose the correct faculty member for ${entry.name}`}
+                            value={
+                              facultyAssignments[entry.key] ? String(facultyAssignments[entry.key]) : ""
+                            }
+                            onChange={(e) =>
+                              onFacultyAssignment(
+                                entry.key,
+                                e.target.value ? Number(e.target.value) : null,
+                              )
+                            }
+                          >
+                            <option value="">Choose the correct faculty member…</option>
+                            {entry.candidates.map((candidate) => (
+                              <option key={candidate.facultyId} value={candidate.facultyId}>
+                                {candidate.fullName} (#{candidate.facultyId},{" "}
+                                {candidate.departmentCode ?? "no department"})
+                              </option>
+                            ))}
+                          </select>
+                          {unresolvedAmbiguous.some((row) => row.key === entry.key) ? (
+                            <p className="text-[11px] font-medium text-red-700">
+                              Required before importing.
+                            </p>
+                          ) : (
+                            <p className="text-[11px] font-medium text-green-700">
+                              Will link to faculty #{facultyAssignments[entry.key]}.
+                            </p>
+                          )}
+                        </div>
+                      ) : entry.kind === "unknown" ? (
+                        <span className="text-xs text-muted">
+                          Add the faculty on Master Data, then preview again.
+                        </span>
+                      ) : (
+                        <span className="text-xs text-muted">
+                          Assign a department on{" "}
+                          <a href="/departments" className="underline">
+                            Departments
+                          </a>
+                          .
+                        </span>
                       )}
                     </td>
                   </tr>
@@ -901,15 +1035,27 @@ function PlanView({
         <button
           className="btn btn-primary"
           onClick={onConfirm}
-          disabled={loading || scopeChanges === 0}
+          disabled={loading || scopeChanges === 0 || unresolvedAmbiguous.length > 0}
         >
           {loading
-            ? "Importing…"
-            : `Confirm import (${scopeChanges} change${scopeChanges === 1 ? "" : "s"} in ${scopeLabel})`}
+            ? reprocessOnly
+              ? "Reprocessing…"
+              : "Importing…"
+            : unresolvedAmbiguous.length > 0
+              ? `Resolve ${unresolvedAmbiguous.length} ambiguous name${
+                  unresolvedAmbiguous.length === 1 ? "" : "s"
+                } first`
+              : reprocessOnly
+                ? `Reprocess existing slots (${scopeChanges} update${
+                    scopeChanges === 1 ? "" : "s"
+                  } in ${scopeLabel})`
+                : `Confirm import (${scopeChanges} change${scopeChanges === 1 ? "" : "s"} in ${scopeLabel})`}
         </button>
         {scopeChanges === 0 ? (
           <span className="text-xs text-muted">
-            Nothing to write in this scope — choose another college or course.
+            {reprocessOnly
+              ? "No already-imported meeting in this scope needs an update. Uncheck reprocess to create the new slots, or choose another college or course."
+              : "Nothing to write in this scope — choose another college or course."}
           </span>
         ) : null}
       </div>

@@ -10,7 +10,8 @@
     "test": "vitest run",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "seed:cet": "tsx scripts/seed-cet-roster.ts"
   },
   "dependencies": {
     "@prisma/client": "6.19.3",
