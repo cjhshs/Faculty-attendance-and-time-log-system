@@ -11,6 +11,7 @@ import {
   eachDate,
   formatISODate,
   formatLong,
+  getTodayLocalDate,
   parseISODate,
   todayUtc,
 } from "@/lib/dates";
@@ -95,7 +96,8 @@ export default async function PrintPage({
     );
   }
 
-  const start = parseISODate(params.start ?? params.date ?? null) ?? todayUtc();
+  const defaultDate = parseISODate(getTodayLocalDate()) ?? todayUtc();
+  const start = parseISODate(params.start ?? params.date ?? null) ?? defaultDate;
   const end = parseISODate(params.end ?? null) ?? start;
   if (start > end) {
     return (

@@ -5,7 +5,7 @@
 // program. These helpers are deliberately pure so the same rules are used by the
 // initial roster, the importer and the tests.
 
-import { facultyNameKey } from "./faculty-department";
+import { facultyNameKey, normalizeFacultyName } from "./faculty-department";
 
 export type MembershipFaculty = {
   id: number;
@@ -30,9 +30,424 @@ export type InitialRosterCandidate = {
 // `npm run seed:cet`. The seed is idempotent and never creates faculty rows.
 export const INITIAL_CET_ROSTER: InitialRosterCandidate[] = [
   {
+    fullName: "Aban, Marianita",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "ABDURAJIK, BASIREN SAMBUTOAN",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
     fullName: "Abueme, Kimberly Kate",
-    source:
-      "Confirmed CET assignment in the existing roster (audit entry faculty.department, 2026-10-29).",
+    source: "Confirmed CET assignment in the existing roster (audit entry faculty.department, 2026-10-29).",
+  },
+  {
+    fullName: "Alarcio, Daniel Jade Hibune",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Alib, Alan Wright",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Alupit, Baby Jane Degino",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "AMBOY, FRYON GIL",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Arriza, Rolando Ragusta",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "ATIENZA, JURIELHYN Suardiana",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Ayunan, Aaron Milanes",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Bachicha, Hubert Von Valencia",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Bantilan, Rudelyn Villarico",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "BARASAN, GARY MACASLING",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Barrientos, Angelo Bioco",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Bayoran, Kris Anjiela Mañaul",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Buhat, Alvin Zamora",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Busangilan, Clinth Eslaban",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Callaga, Jaypee",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Camiller, Elesio III Fuentes",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Capada, Joseph",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Castaño, Ereckjun Estocado",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Castro, Aldrin Bermejo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Casumpang, Von Bryan Valdez",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Ceralde, Julius Cordova",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Cimagala, Jodel Tezado",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Claver, Priscilla De Leon",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Colas, Rosery",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Crujedo, Raize Grace Siasico",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Cueme, Mariton Pacheco",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Dela Fuente, Christine Dago",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Dijan, Corazon Dela Cruz",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Enriquez, Charwin",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Espartero, Joy Mae Navasca",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Espinosa, Lester John",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Esquillo, Honey Loyd Bation",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Fajartin, Christian Jay Peria",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Farnazo, Gay Marie Pardillo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Ferolino, Wendy Rejin Santos",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Gamboa, Desiree Alcoseba",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Genton, Emie Argawanon",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "GRACIA, JOHN LLOYD",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Gusto, Sylvester Avila",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "HECHANOVA, KHYLA DOMOKMAT",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Jamero, Jim Soria",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Jorolan, Kit",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Juevesa, Roel Dalumpines",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Kainage, Arnesto Yanis",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Lacanilao, Edward",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Lagahit, Mary Cris Lerios",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "LANGOMEZ, JERRIC",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Lino, Ernest Jay",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Liquit, Jazer Carballo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Lorente, Bianca Marie Bebanco",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "MACAWAY, GARLAN BATOCAEL",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Mahaling, Joseph Mainit",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Maizo, Francis Thyrone Maglines",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Manalo, Aletheia",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Melicio, Janette Toko",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Moral, Gem Eden Louiza Eusebio",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Mortiga, Arlon Suba-an",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Moscoso, Maria Ysabella",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Musca, Diyls Anthea Callejo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Nalaunan, Lani Erespe",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Narciso, Jessie John Saligue",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Nosotros, Anthony Bryll Elnas",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "OCON, ROSEL GRACE",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Oczon, Ethel Loyloy",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Orang, Renante Carrillo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Orias, Emelyn Enero",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Ortiz, Althea Barcelona",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Pabitay, Aljhon Rhae",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Padua, Jollivie Arnado",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Palacios, Joshua Bravo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Palmes, Mark Lehi Pacres",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Pascual, Aubrey",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Projo, Rodney",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Rañises, Marlon Cabaya",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Reburcio, Gerald Ryan Oñas",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Rendaje, Irene Yap",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Repalbor, Mike Virnel",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Reyes, Gemma Landerio",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "RIVAS, PAULINE ENRHEL",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Rocacurva, Salome Los Banez",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Rojas, Rey Mart Terrado",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Ruales, Gregorio",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Salabao, Ana Fe",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Saligumba, Marisol Facto",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "SALUBRE, JESTLER ANGCO",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "SALVALOZA, SEAN DAVVIN",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "San Luis, Rudyric Bioco",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Siga, Ham",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Silah, Steven",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Silao, D. J. Brylle Gallardo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Siose, Beniffer",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Tabal, Mage Belle Miranda",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Tan, John Michael",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Tangub, Billy Dale B.",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Tongcua, April Joy Enlatierra",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Torres, Dave",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Valenzon, Angelita Hernane",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Vallestero, Kevin Clint Bale",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Vargas, Vince Evan Garcia",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Villacura, Nelly Abegail Saligue",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Viray, Clark Alonzo",
+    source: "Identified CET faculty candidate from the attendance roster.",
+  },
+  {
+    fullName: "Yambing, Primrose Labos",
+    source: "Identified CET faculty candidate from the attendance roster.",
   },
 ];
 
@@ -69,8 +484,9 @@ export function planRosterMembership(
   const target = departmentCode.trim().toUpperCase();
   const rows: RosterMembershipRow[] = candidates.map((candidate) => {
     const key = facultyNameKey(candidate.fullName);
+    const norm = normalizeFacultyName(candidate.fullName);
     const matches = roster
-      .filter((faculty) => facultyNameKey(faculty.fullName) === key)
+      .filter((faculty) => facultyNameKey(faculty.fullName) === key || normalizeFacultyName(faculty.fullName) === norm)
       .map((faculty) => ({
         id: faculty.id,
         fullName: faculty.fullName,
@@ -167,7 +583,12 @@ export function resolveInstructorLink(
       : { kind: "invalid-explicit", facultyId: explicit };
   }
 
-  const matches = roster.filter((faculty) => facultyNameKey(faculty.fullName) === key);
+  const norm = normalizeFacultyName(name);
+  const matches = roster.filter(
+    (faculty) =>
+      facultyNameKey(faculty.fullName) === key ||
+      normalizeFacultyName(faculty.fullName) === norm
+  );
   if (matches.length === 1) {
     return { kind: "linked", facultyId: matches[0].id, via: "roster" };
   }

@@ -1,7 +1,13 @@
-﻿import * as XLSX from "xlsx";
+import * as XLSX from "xlsx";
 import { prisma } from "@/lib/prisma";
 import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/lib/schedule-parser";
-import { facultyNameKey, nameSimilarity, type RosterFaculty } from "@/lib/faculty-department";
+import {
+  facultyNameKey,
+  nameSimilarity,
+  normalizeFacultyName,
+  resolveFacultyDepartmentFromRoster,
+  type RosterFaculty,
+} from "@/lib/faculty-department";
 import {
   resolveInstructorLink,
   scheduleSlotKey,
@@ -49,6 +55,8 @@ export type PlannedSlot = {
   courseCode: string;
   instructorRaw: string;
   facultyName: string | null;
+  facultyDepartment?: string | null;
+  facultyStatus?: "MATCHED" | "AMBIGUOUS" | "UNMATCHED" | "UNASSIGNED" | "TBA";
   termType: string | null;
   semester: string | null;
   schoolYear: string | null;
@@ -175,6 +183,19 @@ export type ImportSummary = ImportReconciliation & {
   programsMapped: number;
   programsUnassigned: number;
   programsUnknown: number;
+  departmentBreakdown: {
+    cet: number;
+    cbe: number;
+    cte: number;
+    coahs: number;
+    other: number;
+    unassigned: number;
+  };
+  instructorReviewCounts: {
+    unassigned: number;
+    unmatched: number;
+    ambiguous: number;
+  };
 };
 
 export type ImportPlan = {
@@ -557,6 +578,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const warningRowSet = new Set<number>();
   let meetingEntries = 0;
   let validBlocks = 0;
+  const departmentBreakdown = { cet: 0, cbe: 0, cte: 0, coahs: 0, other: 0, unassigned: 0 };
 
   // Read the workbook's own semester column so the preview can warn when the
   // file describes a different term than the one selected for import. This is
@@ -650,7 +672,8 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
     validBlocks += meetings.length;
     if (meetings.length === 0) return;
 
-    // Faculty assignment
+    // Faculty assignment and department resolution
+    const facultyResolution = resolveFacultyDepartmentFromRoster(instructorRaw, ctx.faculty);
     let facultyName: string | null = null;
     if (instructorRaw && instructorRaw.toUpperCase() !== "TBA") {
       facultyName = instructorRaw;
@@ -673,7 +696,20 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
           }
         }
       }
+      if (facultyResolution.status === "MATCHED" && facultyResolution.departmentCode) {
+        const d = facultyResolution.departmentCode.toUpperCase();
+        if (d === "CET") departmentBreakdown.cet++;
+        else if (d === "CBE") departmentBreakdown.cbe++;
+        else if (d === "CTE") departmentBreakdown.cte++;
+        else if (d === "COAHS") departmentBreakdown.coahs++;
+        else departmentBreakdown.other++;
+      } else if (facultyResolution.status === "UNASSIGNED") {
+        departmentBreakdown.unassigned++;
+      } else {
+        departmentBreakdown.other++;
+      }
     } else {
+      departmentBreakdown.unassigned++;
       unassigned.push({ row: rowNumber, cn, subject });
       warnings.push({ row: rowNumber, message: `CN ${cn}: unassigned instructor (TBA).` });
       warningRowSet.add(rowNumber);
@@ -714,6 +750,8 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
           courseCode: normalizeCourseCode(courseCode),
           instructorRaw,
           facultyName,
+          facultyDepartment: facultyResolution.departmentCode ?? null,
+          facultyStatus: facultyResolution.status,
           termType: cell(row["Term Type"]) || null,
           semester: target?.semester ?? normalizeSemester(cell(row["Sem"])) ?? null,
           schoolYear: target?.schoolYear ?? null,
@@ -848,6 +886,12 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
       programsMapped,
       programsUnassigned,
       programsUnknown,
+      departmentBreakdown,
+      instructorReviewCounts: {
+        unassigned: facultyReview.filter((r) => r.kind === "no-department").length,
+        unmatched: facultyReview.filter((r) => r.kind === "unknown").length,
+        ambiguous: facultyReview.filter((r) => r.kind === "ambiguous").length,
+      },
     },
     targetTerm: target,
     slots,
@@ -931,8 +975,23 @@ function buildProgramMapping(rows: Record<string, unknown>[], slots: PlannedSlot
 
 // Whether a row falls inside the selected college/program scope. Programs that
 // are not in the catalog count as unassigned.
-export function slotInScope(courseCode: string, scope?: ImportScope | null): boolean {
+export function slotInScope(
+  target: string | { courseCode: string; facultyDepartment?: string | null },
+  scope?: ImportScope | null,
+): boolean {
   if (!scope) return true;
+  if (typeof target === "object" && target !== null) {
+    if (scope.program) {
+      return normalizeCourseCode(target.courseCode) === normalizeCourseCode(scope.program);
+    }
+    const college = (scope.college ?? "").trim();
+    if (!college) return true;
+    if (college === UNASSIGNED_COLLEGE_VALUE) {
+      return !target.facultyDepartment;
+    }
+    return (target.facultyDepartment ?? "").toUpperCase() === college.toUpperCase();
+  }
+  const courseCode = target;
   const key = normalizeCourseCode(courseCode);
   const program = normalizeCourseCode(scope.program ?? "");
   if (program) return key === program;
@@ -975,6 +1034,19 @@ function emptySummary(rowsRead: number, worksheetRows: number): ImportSummary {
     programsMapped: 0,
     programsUnassigned: 0,
     programsUnknown: 0,
+    departmentBreakdown: {
+      cet: 0,
+      cbe: 0,
+      cte: 0,
+      coahs: 0,
+      other: 0,
+      unassigned: 0,
+    },
+    instructorReviewCounts: {
+      unassigned: 0,
+      unmatched: 0,
+      ambiguous: 0,
+    },
   };
 }
 
@@ -1121,7 +1193,7 @@ export async function writePlan(
   // The plan is always validated over the whole file; the scope only narrows
   // what is written. This keeps cross-department instructor checks intact.
   const scopedSlots = scope
-    ? plan.slots.filter((s) => slotInScope(s.courseCode, scope))
+    ? plan.slots.filter((s) => slotInScope(s, scope))
     : plan.slots;
 
   const result: CommitResult = {
@@ -1256,12 +1328,17 @@ export async function writePlan(
       // create a second roster row. A name matching several rows is left
       // unlinked unless an administrator explicitly chose one.
       const roster = await tx.faculty.findMany({
-        select: { id: true, fullName: true, departmentId: true },
+        select: {
+          id: true,
+          fullName: true,
+          departmentId: true,
+          department: { select: { code: true } },
+        },
       });
       const rosterRows = roster.map((row) => ({
         id: row.id,
         fullName: row.fullName,
-        departmentCode: null,
+        departmentCode: row.department?.code ?? null,
       }));
       const facultyNamesByKey = new Map<string, string>();
       for (const slot of slotsToWrite) {

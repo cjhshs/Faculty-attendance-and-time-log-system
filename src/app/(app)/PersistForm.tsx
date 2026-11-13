@@ -52,6 +52,14 @@ export function PersistForm({
         }
         const name = element.name;
         if (!name || !(name in saved)) continue;
+        // Date inputs must always initialize to today's local date unless explicitly in the URL;
+        // never overwrite them with a stale date saved from a previous session.
+        if (
+          element instanceof HTMLInputElement &&
+          (element.type === "date" || name === "date" || name === "start" || name === "end")
+        ) {
+          continue;
+        }
         if (element instanceof HTMLInputElement) {
           if (element.type === "checkbox") {
             element.checked = (checkboxes.get(name) ?? []).includes(element.value);

@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useMemo, useState } from "react";
 import type { ActionResult } from "../master/actions";
 
 // Per-faculty membership editor used by the Departments page. Assignment and
@@ -80,6 +80,124 @@ export function DepartmentMembershipForm({
         </form>
       ) : null}
       {removeState ? <ResultMessage state={removeState} /> : null}
+    </div>
+  );
+}
+
+export function AddFacultyToDepartmentForm({
+  assignAction,
+  facultyList,
+  departments,
+  defaultDepartmentId,
+}: {
+  assignAction: (formData: FormData) => Promise<ActionResult>;
+  facultyList: { id: number; fullName: string; departmentCode: string | null }[];
+  departments: { id: number; code: string; name: string }[];
+  defaultDepartmentId?: number | null;
+}) {
+  const [filterText, setFilterText] = useState("");
+  const [selectedFacultyId, setSelectedFacultyId] = useState("");
+  const [targetDepartmentId, setTargetDepartmentId] = useState(
+    defaultDepartmentId ? String(defaultDepartmentId) : departments[0]?.id ? String(departments[0].id) : "",
+  );
+
+  const [state, formAction, isPending] = useActionState(
+    async (_prev: ActionResult | null, formData: FormData) => {
+      const res = await assignAction(formData);
+      if (res.ok) {
+        setSelectedFacultyId("");
+      }
+      return res;
+    },
+    null,
+  );
+
+  const filteredFaculty = useMemo(() => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return facultyList;
+    return facultyList.filter(
+      (f) =>
+        f.fullName.toLowerCase().includes(q) ||
+        (f.departmentCode && f.departmentCode.toLowerCase().includes(q)),
+    );
+  }, [facultyList, filterText]);
+
+  return (
+    <div className="rounded-lg border border-line bg-slate-50 p-4">
+      <h3 className="text-sm font-semibold text-navy">Add / Assign Faculty to Department</h3>
+      <p className="mt-0.5 text-xs text-muted">
+        Select any existing faculty member and assign them to a department. Their schedule and
+        attendance records will immediately reflect this department.
+      </p>
+
+      <form action={formAction} className="mt-3 space-y-3">
+        <div className="flex flex-wrap items-end gap-3">
+          <div className="min-w-[14rem] flex-1">
+            <label className="label text-xs" htmlFor="add-faculty-search">
+              Filter faculty by name
+            </label>
+            <input
+              id="add-faculty-search"
+              type="text"
+              placeholder="Search faculty..."
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              className="input h-9 text-xs"
+            />
+          </div>
+
+          <div className="min-w-[18rem] flex-1">
+            <label className="label text-xs" htmlFor="add-faculty-select">
+              Select faculty member ({filteredFaculty.length})
+            </label>
+            <select
+              id="add-faculty-select"
+              name="id"
+              value={selectedFacultyId}
+              onChange={(e) => setSelectedFacultyId(e.target.value)}
+              required
+              className="input h-9 text-xs"
+            >
+              <option value="">-- Choose faculty member --</option>
+              {filteredFaculty.map((f) => (
+                <option key={f.id} value={f.id}>
+                  {f.fullName} ({f.departmentCode ? f.departmentCode : "Unassigned"})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="w-48">
+            <label className="label text-xs" htmlFor="add-dept-select">
+              Target department
+            </label>
+            <select
+              id="add-dept-select"
+              name="departmentId"
+              value={targetDepartmentId}
+              onChange={(e) => setTargetDepartmentId(e.target.value)}
+              className="input h-9 text-xs"
+            >
+              <option value="">No department (Unassign)</option>
+              {departments.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.code} — {d.name}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <button
+            type="submit"
+            disabled={!selectedFacultyId || isPending}
+            className="btn btn-primary h-9 px-4 text-xs font-semibold"
+          >
+            {isPending ? "Assigning…" : "Assign to Department"}
+          </button>
+        </div>
+
+        {state ? <ResultMessage state={state} /> : null}
+      </form>
     </div>
   );
 }

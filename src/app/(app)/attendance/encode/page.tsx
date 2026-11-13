@@ -6,7 +6,7 @@ import { prisma } from "@/lib/prisma";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { getSlotsForDateAndCourses, getSlotsForDateAndDepartment } from "@/lib/schedule-query";
 import { buildProgramSheet, type SheetSlot } from "@/lib/attendance-sheet";
-import { parseISODate, todayUtc, formatLong, hoursOfRange } from "@/lib/dates";
+import { formatISODate, formatLong, getTodayLocalDate, hoursOfRange, parseISODate, todayUtc } from "@/lib/dates";
 import { getActiveTerm, parseTerm, isValidTerm, type Term } from "@/lib/terms";
 import {
   attendanceGenerationGate,
@@ -34,8 +34,9 @@ export default async function EncodePage({
 }) {
   const user = await requirePermission(PERMISSIONS.ATTENDANCE_ENCODE);
   const params = await searchParams;
-  const date = parseISODate(params.date ?? null) ?? todayUtc();
-  const isoDate = date.toISOString().slice(0, 10);
+  const defaultDate = parseISODate(getTodayLocalDate()) ?? todayUtc();
+  const date = parseISODate(params.date ?? null) ?? defaultDate;
+  const isoDate = formatISODate(date);
   const department = (params.department ?? params.college ?? "").trim();
   const requestedTerm =
     params.schoolYear || params.semester

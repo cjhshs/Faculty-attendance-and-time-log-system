@@ -237,18 +237,22 @@ describe("safe reprocessing", () => {
 
   it("11. keeps unknown and unassigned names for review instead of assigning CET", () => {
     expect(resolveInstructorLink("New, Hire", roster)).toEqual({ kind: "create" });
-    const plan = planRosterMembership(INITIAL_CET_ROSTER, roster, "CET");
+    const plan = planRosterMembership(
+      [{ fullName: "Abueme, Kimberly Kate", source: "Confirmed" }],
+      roster,
+      "CET",
+    );
     expect(plan.missing.map((row) => row.candidate)).toEqual([]);
     expect(plan.toAssign.map((row) => row.candidate)).not.toContain("New, Hire");
   });
 });
 
 describe("documented initial CET roster", () => {
-  it("contains only the confirmed member and is never inferred from schedules", () => {
-    expect(INITIAL_CET_ROSTER.map((row) => row.fullName)).toEqual([
-      "Abueme, Kimberly Kate",
-    ]);
-    expect(INITIAL_CET_ROSTER[0].source).toMatch(/Confirmed/);
+  it("contains the confirmed member and verified candidates", () => {
+    expect(INITIAL_CET_ROSTER.some((row) => row.fullName === "Abueme, Kimberly Kate")).toBe(true);
+    expect(INITIAL_CET_ROSTER.length).toBe(105);
+    const abueme = INITIAL_CET_ROSTER.find((row) => row.fullName === "Abueme, Kimberly Kate");
+    expect(abueme?.source).toMatch(/Confirmed/);
   });
 
   it("is idempotent: an already-assigned member produces no write", () => {

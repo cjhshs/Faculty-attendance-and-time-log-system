@@ -15,7 +15,22 @@ export function dateOnly(year: number, month1: number, day: number): Date {
   return new Date(Date.UTC(year, month1 - 1, day));
 }
 
+// Current calendar date in school's local timezone (Asia/Manila).
+// Returns "YYYY-MM-DD" formatted using safe en-CA locale.
+export function getTodayLocalDate(): string {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Manila",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return formatter.format(new Date());
+}
+
 export function todayUtc(): Date {
+  const localIso = getTodayLocalDate();
+  const parsed = parseISODate(localIso);
+  if (parsed) return parsed;
   const now = new Date();
   return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
 }

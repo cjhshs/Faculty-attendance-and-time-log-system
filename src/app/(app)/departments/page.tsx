@@ -8,7 +8,7 @@ import {
   removeFacultyDepartment,
   updateFacultyDepartment,
 } from "../master/actions";
-import { DepartmentMembershipForm } from "./DepartmentMembershipForm";
+import { AddFacultyToDepartmentForm, DepartmentMembershipForm } from "./DepartmentMembershipForm";
 import { findDuplicateFacultyRows } from "@/lib/faculty-department";
 import { INITIAL_CET_ROSTER, planRosterMembership } from "@/lib/faculty-membership";
 
@@ -268,6 +268,27 @@ export default async function DepartmentsPage({
             ))}
           </ul>
         </div>
+      ) : null}
+
+      {canManage ? (
+        <AddFacultyToDepartmentForm
+          assignAction={updateFacultyDepartment}
+          facultyList={roster.map((r) => ({
+            id: r.id,
+            fullName: r.fullName,
+            departmentCode: r.departmentCode,
+          }))}
+          departments={colleges.map((c) => ({
+            id: c.id,
+            code: c.code,
+            name: c.name,
+          }))}
+          defaultDepartmentId={
+            view !== "all" && view !== "unassigned"
+              ? colleges.find((c) => c.code === view)?.id ?? null
+              : colleges.find((c) => c.code === "CET")?.id ?? null
+          }
+        />
       ) : null}
 
       <section className="card min-w-0 space-y-3">

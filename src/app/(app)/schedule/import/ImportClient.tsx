@@ -476,7 +476,12 @@ function PlanView({
         : true;
   const scopeMapping = plan.programMapping.filter(inScope);
   const scopeCodes = new Set(scopeMapping.map((m) => m.code));
-  const scopeSlots = plan.slots.filter((slot) => scopeCodes.has(slot.courseCode));
+  const scopeSlots = plan.slots.filter((slot) => {
+    if (scopeProgram) return slot.courseCode === scopeProgram;
+    if (!scopeCollege) return true;
+    if (scopeCollege === "unassigned") return !slot.facultyDepartment;
+    return (slot.facultyDepartment ?? "").toUpperCase() === scopeCollege.toUpperCase();
+  });
   const scopeNewSlots = scopeSlots.filter((slot) => slot.status === "new");
   const scopeUpdatedSlots = scopeSlots.filter((slot) => slot.status === "update");
   // Reprocessing never creates a slot, so only updates to already-existing
@@ -629,6 +634,45 @@ function PlanView({
             section before this import can be confirmed.
           </p>
         ) : null}
+      </div>
+
+      <div className="card space-y-3">
+        <div>
+          <h3 className="text-sm font-semibold text-navy">Department Classification Breakdown</h3>
+          <p className="text-xs text-muted">
+            Parsed rows classified strictly by the instructor&apos;s registered faculty department (independent of teaching assignment or student course codes).
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-6">
+          <Stat label="CET" value={s.departmentBreakdown?.cet ?? 0} tone="green" hint="Engineering & Tech" />
+          <Stat label="CBE" value={s.departmentBreakdown?.cbe ?? 0} hint="Business Education" />
+          <Stat label="CTE" value={s.departmentBreakdown?.cte ?? 0} hint="Teacher Education" />
+          <Stat label="COAHS" value={s.departmentBreakdown?.coahs ?? 0} hint="Allied Health Sciences" />
+          <Stat label="Other" value={s.departmentBreakdown?.other ?? 0} hint="Other colleges" />
+          <Stat
+            label="Unassigned"
+            value={s.departmentBreakdown?.unassigned ?? 0}
+            tone={s.departmentBreakdown?.unassigned ? "amber" : undefined}
+            hint="No department / TBA"
+          />
+        </div>
+        <div className="mt-2 border-t border-line pt-2">
+          <p className="text-xs font-medium text-navy">Instructor Review Summary:</p>
+          <div className="mt-1 flex flex-wrap gap-4 text-xs text-muted">
+            <span>
+              <strong>Unassigned</strong> (in roster, no department):{" "}
+              <span className="font-semibold text-amber-700">{s.instructorReviewCounts?.unassigned ?? 0}</span>
+            </span>
+            <span>
+              <strong>Unmatched</strong> (not in faculty roster):{" "}
+              <span className="font-semibold text-red-700">{s.instructorReviewCounts?.unmatched ?? 0}</span>
+            </span>
+            <span>
+              <strong>Ambiguous</strong> (multiple roster matches):{" "}
+              <span className="font-semibold text-red-700">{s.instructorReviewCounts?.ambiguous ?? 0}</span>
+            </span>
+          </div>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
@@ -1074,10 +1118,12 @@ function Stat({
   label,
   value,
   tone,
+  hint,
 }: {
   label: string;
   value: number;
-  tone?: "green" | "blue" | "red";
+  tone?: "green" | "blue" | "red" | "amber";
+  hint?: string;
 }) {
   const toneClass =
     tone === "green"
@@ -1086,11 +1132,14 @@ function Stat({
         ? "text-blue-700"
         : tone === "red"
           ? "text-red-700"
-          : "text-navy";
+          : tone === "amber"
+            ? "text-amber-700"
+            : "text-navy";
   return (
     <div className="card">
       <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
       <p className={`mt-1 text-lg font-bold ${toneClass}`}>{value}</p>
+      {hint ? <p className="text-[11px] text-muted">{hint}</p> : null}
     </div>
   );
 }

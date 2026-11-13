@@ -5,6 +5,8 @@
 // source of truth. Unknown or ambiguous instructor names are reported for
 // review instead of being assigned a department.
 
+import { prisma } from "@/lib/prisma";
+
 export type RosterFaculty = {
   id: number;
   fullName: string;
@@ -31,6 +33,180 @@ export function facultyNameKey(raw: string | null | undefined): string {
     .replace(/\s*\.\s*/g, ".")
     .trim()
     .toLowerCase();
+}
+
+// Reusable name normalization standardizing whitespace, periods, commas, and casing.
+export function normalizeFacultyName(name: string | null | undefined): string {
+  return String(name ?? "")
+    .normalize("NFKC")
+    .trim()
+    .replace(/[\u2018\u2019\u02bc]/g, "'")
+    .replace(/[.,]/g, "")
+    .replace(/\s+/g, " ")
+    .toUpperCase();
+}
+
+// Pure in-memory faculty department resolution using the normalized name.
+export function resolveFacultyDepartmentFromRoster<
+  T extends {
+    id: number;
+    fullName: string;
+    departmentCode?: string | null;
+    departmentName?: string | null;
+  },
+>(
+  instructorName: string | null | undefined,
+  roster: T[],
+  assignments: Record<string, number> = {},
+): {
+  status: "MATCHED" | "AMBIGUOUS" | "UNMATCHED" | "UNASSIGNED" | "TBA";
+  departmentCode: string | null;
+  departmentName: string | null;
+  faculty: T | null;
+  matches: T[];
+} {
+  const normalized = normalizeFacultyName(instructorName);
+  if (!normalized || normalized === "TBA") {
+    return {
+      status: "TBA",
+      departmentCode: null,
+      departmentName: null,
+      faculty: null,
+      matches: [],
+    };
+  }
+
+  const explicit = assignments[normalized] ?? assignments[facultyNameKey(instructorName)];
+  if (explicit !== undefined) {
+    const match = roster.find((f) => f.id === explicit);
+    if (
+      match &&
+      (normalizeFacultyName(match.fullName) === normalized ||
+        facultyNameKey(match.fullName) === facultyNameKey(instructorName))
+    ) {
+      if (match.departmentCode) {
+        return {
+          status: "MATCHED",
+          departmentCode: match.departmentCode,
+          departmentName: match.departmentName ?? null,
+          faculty: match,
+          matches: [match],
+        };
+      }
+      return {
+        status: "UNASSIGNED",
+        departmentCode: null,
+        departmentName: null,
+        faculty: match,
+        matches: [match],
+      };
+    }
+  }
+
+  const matches = roster.filter(
+    (f) =>
+      normalizeFacultyName(f.fullName) === normalized ||
+      facultyNameKey(f.fullName) === facultyNameKey(instructorName),
+  );
+
+  if (matches.length === 0) {
+    return {
+      status: "UNMATCHED",
+      departmentCode: null,
+      departmentName: null,
+      faculty: null,
+      matches: [],
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      status: "AMBIGUOUS",
+      departmentCode: null,
+      departmentName: null,
+      faculty: null,
+      matches,
+    };
+  }
+
+  const faculty = matches[0];
+  if (!faculty.departmentCode) {
+    return {
+      status: "UNASSIGNED",
+      departmentCode: null,
+      departmentName: null,
+      faculty,
+      matches,
+    };
+  }
+
+  return {
+    status: "MATCHED",
+    departmentCode: faculty.departmentCode,
+    departmentName: faculty.departmentName ?? null,
+    faculty,
+    matches,
+  };
+}
+
+// Database-backed faculty department resolution.
+export async function resolveFacultyDepartment(instructorName: string) {
+  const normalized = normalizeFacultyName(instructorName);
+  if (!normalized || normalized === "TBA") {
+    return {
+      status: "TBA" as const,
+      department: null,
+      faculty: null,
+      matches: [],
+    };
+  }
+
+  const allFaculty = await prisma.faculty.findMany({
+    include: {
+      department: true,
+    },
+  });
+
+  const matches = allFaculty.filter(
+    (f) =>
+      normalizeFacultyName(f.fullName) === normalized ||
+      facultyNameKey(f.fullName) === facultyNameKey(instructorName),
+  );
+
+  if (matches.length === 0) {
+    return {
+      status: "UNMATCHED" as const,
+      department: null,
+      faculty: null,
+      matches: [],
+    };
+  }
+
+  if (matches.length > 1) {
+    return {
+      status: "AMBIGUOUS" as const,
+      department: null,
+      faculty: null,
+      matches,
+    };
+  }
+
+  const faculty = matches[0];
+  if (!faculty.departmentId || !faculty.department) {
+    return {
+      status: "UNASSIGNED" as const,
+      department: null,
+      faculty,
+      matches: [faculty],
+    };
+  }
+
+  return {
+    status: "MATCHED" as const,
+    department: faculty.department,
+    faculty,
+    matches: [faculty],
+  };
 }
 
 function lettersOnly(value: string): string {
