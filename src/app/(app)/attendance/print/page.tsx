@@ -16,7 +16,7 @@ import {
   todayUtc,
 } from "@/lib/dates";
 import { getActiveTerm, parseTerm, isValidTerm, type Term } from "@/lib/terms";
-import { flattenPrintPages, reconcileProgramSheet } from "@/lib/attendance-sheet";
+import { flattenPrintPages, reconcileProgramSheet, type SheetSlot } from "@/lib/attendance-sheet";
 import {
   clampRangeToPeriod,
   getAcademicPeriod,
@@ -24,6 +24,13 @@ import {
   periodRangeWarning,
 } from "@/lib/academic-period";
 import { attendanceSignatureScopeKey, getSignatureValues } from "@/lib/print-signature";
+import {
+  buildSheetKey,
+  getCustomFacultyForSheet,
+  getExcludedFacultyIdsForSheet,
+} from "@/lib/custom-sheet-faculty";
+import { weekdayOfDate } from "@/lib/schedule-query";
+import { termWhere } from "@/lib/terms";
 import { AttendanceSheets, type SheetCourse } from "../AttendanceSheets";
 import { AttendancePicker } from "../AttendancePicker";
 import { PrintButton } from "../PrintButton";
@@ -31,6 +38,8 @@ import { PrintPageSelector } from "../PrintPageSelector";
 import { AutoPrint } from "../AutoPrint";
 import { SignatureFab } from "../SignatureFab";
 import { PersistForm } from "../../PersistForm";
+import { CustomFacultySearch } from "../CustomFacultySearch";
+import { ExcludedFacultyBanner } from "../ExcludedFacultyBanner";
 
 // A printable range is deliberately bounded: each day is a full sheet set, and
 // generating months of paper in one request would be an accidental action.
@@ -41,21 +50,14 @@ type SlotRow = Awaited<ReturnType<typeof getSlotsForDateAndCourses>>[number];
 type DaySheet = {
   date: Date;
   isoDate: string;
+  sheetKey: string;
   holidayLabel: string | null;
   reviewSlots: SlotRow[];
+  customFaculty: Awaited<ReturnType<typeof getCustomFacultyForSheet>>;
+  excludedFaculty: { id: number; fullName: string }[];
   slotsByCourse: {
     course: SheetCourse;
-    slots: {
-      id: number;
-      cn: string;
-      subject: string;
-      start: string;
-      end: string;
-      roomCode: string;
-      facultyId: number | null;
-      facultyName: string | null;
-      surname: string | null;
-    }[];
+    slots: SheetSlot[];
   }[];
   totalPages: number;
   renderedHours: number;
@@ -181,6 +183,27 @@ export default async function PrintPage({
   const days: DaySheet[] = [];
   for (const date of dates) {
     const holiday = await prisma.holiday.findFirst({ where: { date } });
+    const daySheetKey = buildSheetKey({
+      date,
+      department: department || null,
+      programs: department ? [] : selectedCodes,
+      schoolYear: selectedTerm.schoolYear,
+      semester: selectedTerm.semester,
+    });
+
+    const [excludedIds, customEntries] = await Promise.all([
+      getExcludedFacultyIdsForSheet(daySheetKey),
+      getCustomFacultyForSheet(daySheetKey),
+    ]);
+
+    const excludedFacultyRows =
+      excludedIds.size > 0
+        ? await prisma.faculty.findMany({
+            where: { id: { in: Array.from(excludedIds) } },
+            select: { id: true, fullName: true },
+          })
+        : [];
+
     const rawSlots = holiday
       ? []
       : department
@@ -191,11 +214,16 @@ export default async function PrintPage({
             selectedTerm,
           );
 
+    // Filter out faculty members who were explicitly excluded from this sheet
+    const activeSlots = rawSlots.filter(
+      (s) => s.facultyId == null || !excludedIds.has(s.facultyId),
+    );
+
     // Department membership is enforced from the roster, not the program. Slots
     // without a faculty member cannot be attributed to a department and are
     // reported for review instead of being guessed.
-    const reviewSlots = rawSlots.filter((s) => s.facultyId == null);
-    const slots = rawSlots.filter((s) => s.facultyId != null);
+    const reviewSlots = activeSlots.filter((s) => s.facultyId == null);
+    const slots = activeSlots.filter((s) => s.facultyId != null);
 
     const overrides = holiday
       ? []
@@ -214,37 +242,166 @@ export default async function PrintPage({
       }
     }
 
-    const grouped = new Map<number, typeof slots>();
-    for (const slot of slots) {
-      const list = grouped.get(slot.courseId) ?? [];
-      list.push(slot);
-      grouped.set(slot.courseId, list);
-    }
+    const grouped = new Map<
+      number,
+      {
+        course: SheetCourse;
+        slots: SheetSlot[];
+      }
+    >();
 
-    const slotsByCourse = Array.from(grouped.values())
-      .map((courseSlots) => {
-        const course = courseSlots[0].course;
-        return {
+    for (const slot of slots) {
+      const course = slot.course;
+      if (!grouped.has(slot.courseId)) {
+        grouped.set(slot.courseId, {
           course: {
             id: course.id,
             code: course.code,
             name: course.name,
             collegeName: course.college?.name ?? null,
           },
-          slots: courseSlots.map((s) => ({
-            id: s.id,
-            cn: s.cn,
-            subject: s.subject,
-            start: s.startTime,
-            end: s.endTime,
-            roomCode: overrideBySlot.get(s.id) ?? s.room.code,
-            facultyId: s.facultyId,
-            facultyName: s.faculty?.fullName ?? null,
-            surname: s.faculty?.surname ?? null,
-          })),
-        };
-      })
-      .sort((a, b) => a.course.code.localeCompare(b.course.code));
+          slots: [],
+        });
+      }
+      grouped.get(slot.courseId)!.slots.push({
+        id: slot.id,
+        cn: slot.cn,
+        subject: slot.subject,
+        start: slot.startTime,
+        end: slot.endTime,
+        roomCode: overrideBySlot.get(slot.id) ?? slot.room.code,
+        facultyId: slot.facultyId,
+        facultyName: slot.faculty?.fullName ?? null,
+        surname: slot.faculty?.surname ?? null,
+        isCustom: false,
+      });
+    }
+
+    // Retrieve schedule slots and room information for manually added custom faculty
+    const customFacultyIds = customEntries.map((c) => c.facultyId);
+    const weekday = weekdayOfDate(date);
+    const [customRawSlots, customOverrides] = await Promise.all([
+      customFacultyIds.length && !holiday
+        ? prisma.scheduleSlot.findMany({
+            where: {
+              facultyId: { in: customFacultyIds },
+              weekday,
+              ...termWhere(selectedTerm),
+            },
+            include: {
+              room: true,
+              course: { include: { college: true } },
+              faculty: { include: { department: true } },
+            },
+            orderBy: [{ startTime: "asc" }, { endTime: "asc" }],
+          })
+        : Promise.resolve([]),
+      customFacultyIds.length && !holiday
+        ? prisma.attendance.findMany({
+            where: {
+              date,
+              roomOverride: { not: null },
+              slot: { facultyId: { in: customFacultyIds } },
+            },
+            select: { slotId: true, roomOverride: true },
+          })
+        : Promise.resolve([]),
+    ]);
+    const customOverrideBySlot = new Map(customOverrides.map((o) => [o.slotId, o.roomOverride!]));
+
+    for (const customEntry of customEntries) {
+      const faculty = customEntry.faculty;
+      const fSlots = customRawSlots.filter((s) => s.facultyId === faculty.id);
+
+      if (fSlots.length > 0) {
+        // Faculty has real scheduled slots on this day
+        for (const slot of fSlots) {
+          const courseId = customEntry.courseId ?? slot.courseId;
+          const course = customEntry.course ?? slot.course;
+          const collegeName =
+            "college" in course && course.college ? course.college.name : null;
+          if (!grouped.has(courseId)) {
+            grouped.set(courseId, {
+              course: {
+                id: course.id,
+                code: course.code,
+                name: course.name,
+                collegeName,
+              },
+              slots: [],
+            });
+          }
+          grouped.get(courseId)!.slots.push({
+            id: slot.id,
+            cn: slot.cn,
+            subject: slot.subject,
+            start: slot.startTime,
+            end: slot.endTime,
+            roomCode: customOverrideBySlot.get(slot.id) ?? slot.room.code,
+            facultyId: faculty.id,
+            facultyName: faculty.fullName,
+            surname: faculty.surname,
+            isCustom: true,
+          });
+        }
+      } else {
+        // Faculty has no schedule on this day: display empty cells rather than inventing a room
+        let targetCourseId = customEntry.courseId;
+        let targetCourse: SheetCourse | null = customEntry.course
+          ? {
+              id: customEntry.course.id,
+              code: customEntry.course.code,
+              name: customEntry.course.name,
+              collegeName: null,
+            }
+          : null;
+
+        if (!targetCourseId && grouped.size > 0) {
+          const first = Array.from(grouped.values())[0];
+          targetCourseId = first.course.id;
+          targetCourse = first.course;
+        }
+
+        if (!targetCourseId) {
+          const fallback = selectedCourses[0] ?? allCourses[0];
+          if (fallback) {
+            targetCourseId = fallback.id;
+            targetCourse = {
+              id: fallback.id,
+              code: fallback.code,
+              name: fallback.name,
+              collegeName:
+                "college" in fallback && fallback.college ? fallback.college.name : null,
+            };
+          }
+        }
+
+        if (targetCourseId && targetCourse) {
+          if (!grouped.has(targetCourseId)) {
+            grouped.set(targetCourseId, {
+              course: targetCourse,
+              slots: [],
+            });
+          }
+          grouped.get(targetCourseId)!.slots.push({
+            id: -faculty.id,
+            cn: "CUSTOM",
+            subject: "CUSTOM",
+            start: "",
+            end: "",
+            roomCode: "",
+            facultyId: faculty.id,
+            facultyName: faculty.fullName,
+            surname: faculty.surname,
+            isCustom: true,
+          });
+        }
+      }
+    }
+
+    const slotsByCourse = Array.from(grouped.values()).sort((a, b) =>
+      a.course.code.localeCompare(b.course.code),
+    );
 
     // Compare each program's rendered grid against its schedule. A mismatch
     // means a class would silently vanish from the sheet; staff are warned but
@@ -265,8 +422,11 @@ export default async function PrintPage({
     days.push({
       date,
       isoDate: formatISODate(date),
+      sheetKey: daySheetKey,
       holidayLabel: holiday?.label ?? null,
       reviewSlots,
+      customFaculty: customEntries,
+      excludedFaculty: excludedFacultyRows,
       slotsByCourse,
       totalPages,
       renderedHours: reconciliations.reduce((n, r) => n + r.result.renderedHours, 0),
@@ -330,6 +490,14 @@ export default async function PrintPage({
     semester: selectedTerm.semester,
   });
   const signature = await getSignatureValues(scopeKey, settings);
+
+  const mainSheetKey = buildSheetKey({
+    date: rangeStart,
+    department: department || null,
+    programs: department ? [] : selectedCodes,
+    schoolYear: selectedTerm.schoolYear,
+    semester: selectedTerm.semester,
+  });
 
   const scopeLabel = department
     ? department === "unassigned"
@@ -420,6 +588,16 @@ export default async function PrintPage({
               ))}
             </select>
           </div>
+
+          <CustomFacultySearch
+            sheetKey={mainSheetKey}
+            date={formatISODate(rangeStart)}
+            schoolYear={selectedTerm.schoolYear}
+            semester={selectedTerm.semester}
+            currentFacultyIds={Array.from(scheduledFaculty)}
+            availableCourses={allCourses.map((c) => ({ id: c.id, code: c.code, name: c.name }))}
+          />
+
           <div className="ml-auto flex items-center gap-2">
             <button type="submit" className="btn btn-primary">
               Generate
@@ -618,6 +796,30 @@ export default async function PrintPage({
         const localPage = validPage ? validPage - pageStart : null;
         return (
           <section key={day.isoDate} className="print-day space-y-3">
+            {day.excludedFaculty.length > 0 ? (
+              <ExcludedFacultyBanner
+                sheetKey={day.sheetKey}
+                excludedFaculty={day.excludedFaculty}
+              />
+            ) : null}
+            {day.customFaculty.length > 0 ? (
+              <div className="no-print flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-1.5 text-xs text-amber-900">
+                <span className="font-semibold">Manually Added Faculty ({day.customFaculty.length}):</span>
+                {day.customFaculty.map((cf) => (
+                  <span
+                    key={cf.id}
+                    className="inline-flex items-center gap-1.5 rounded border border-amber-300 bg-white px-2 py-0.5 text-xs"
+                  >
+                    <span>{cf.faculty.fullName}</span>
+                    {cf.faculty.department ? (
+                      <span className="text-[10px] text-muted">({cf.faculty.department.code})</span>
+                    ) : (
+                      <span className="text-[10px] text-muted">(No dept)</span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            ) : null}
             {days.length > 1 ? (
               <h2 className="no-print border-b border-line pb-1 text-sm font-semibold">
                 {formatLong(day.date)}
@@ -631,6 +833,7 @@ export default async function PrintPage({
             <div className="overflow-x-auto print:overflow-visible">
               <AttendanceSheets
                 date={day.date}
+                sheetKey={day.sheetKey}
                 header={{
                   schoolHeader: settings.school_header,
                   collegeHeader: settings.college_header,

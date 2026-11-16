@@ -1,6 +1,9 @@
-import { Fragment } from "react";
+"use client";
+
+import { Fragment, useState } from "react";
+import { useRouter } from "next/navigation";
 import { buildProgramSheet, paginateColumns, type SheetSlot } from "@/lib/attendance-sheet";
-import { formatLong } from "@/lib/dates";
+import { formatISODate, formatLong } from "@/lib/dates";
 import logo1 from "@/app/logo/logo1.png";
 import logo2 from "@/app/logo/logo2.png";
 
@@ -31,6 +34,8 @@ export function AttendanceSheets({
   onlyPage,
   pageOffset = 0,
   totalPages: totalPagesOverride,
+  sheetKey,
+  onRemoveFaculty,
 }: {
   date: Date;
   header: SheetHeaderData;
@@ -44,6 +49,8 @@ export function AttendanceSheets({
   // is `pageOffset + 1`, and footers report the document-wide total.
   pageOffset?: number;
   totalPages?: number;
+  sheetKey?: string;
+  onRemoveFaculty?: (facultyId: number, label: string, isCustom: boolean) => void;
 }) {
   // No-class day: print the note instead of the class grid (staff may still print).
   if (noClassLabel) {
@@ -94,6 +101,8 @@ export function AttendanceSheets({
           showUnassigned={pageIndex === 0}
           pageNumber={pageNumber}
           totalPages={totalPagesOverride ?? computedTotal}
+          sheetKey={sheetKey}
+          onRemoveFaculty={onRemoveFaculty}
         />,
       );
     }
@@ -118,6 +127,8 @@ function ProgramSheetPage({
   showUnassigned,
   pageNumber,
   totalPages,
+  sheetKey,
+  onRemoveFaculty,
 }: {
   date: Date;
   header: SheetHeaderData;
@@ -127,7 +138,49 @@ function ProgramSheetPage({
   showUnassigned: boolean;
   pageNumber: number;
   totalPages: number;
+  sheetKey?: string;
+  onRemoveFaculty?: (facultyId: number, label: string, isCustom: boolean) => void;
 }) {
+  const router = useRouter();
+  const [removingId, setRemovingId] = useState<number | null>(null);
+
+  async function handleRemove(facultyId: number, label: string, isCustom: boolean) {
+    if (onRemoveFaculty) {
+      onRemoveFaculty(facultyId, label, isCustom);
+      return;
+    }
+    if (!sheetKey) return;
+
+    const actionText = isCustom
+      ? `Remove ${label} from this attendance sheet?\n\nThis will remove them from this sheet. Master records and reusable custom selection are preserved.`
+      : `Remove/exclude ${label} from this attendance sheet?\n\nThis will exclude them from this daily sheet. Master faculty records, schedules, and historical attendance remain intact.`;
+    if (!window.confirm(actionText)) return;
+
+    setRemovingId(facultyId);
+    try {
+      const res = await fetch("/api/attendance/custom-faculty/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sheetKey,
+          date: formatISODate(date),
+          facultyId,
+          isCustom,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        alert(data.error ?? "Failed to remove faculty member.");
+        return;
+      }
+      router.refresh();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to remove faculty member.");
+    } finally {
+      setRemovingId(null);
+    }
+  }
+
   return (
     <section className="print-sheet mb-8 bg-white p-3 shadow-sm">
       <SheetHead date={date} header={header} course={course} />
@@ -151,7 +204,25 @@ function ProgramSheetPage({
                 colSpan={2}
                 className="border border-black px-1 py-0.5 text-center font-bold"
               >
-                {col.label}
+                <div className="flex items-center justify-center gap-1">
+                  <span>{col.label}</span>
+                  {col.isCustom ? (
+                    <span className="no-print rounded bg-amber-100 px-1 py-0.2 text-[9px] font-normal text-amber-800">
+                      Custom
+                    </span>
+                  ) : null}
+                  {(sheetKey || onRemoveFaculty) ? (
+                    <button
+                      type="button"
+                      title={`Remove ${col.label} from this sheet`}
+                      onClick={() => handleRemove(col.facultyId, col.label, Boolean(col.isCustom))}
+                      disabled={removingId === col.facultyId}
+                      className="no-print ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-slate-400 hover:bg-red-50 hover:text-red-600 focus:outline-none transition-colors cursor-pointer text-xs leading-none"
+                    >
+                      {removingId === col.facultyId ? "…" : "\u2212"}
+                    </button>
+                  ) : null}
+                </div>
               </th>
             ))}
           </tr>

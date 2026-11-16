@@ -32,6 +32,7 @@ model User {
   repairDecisions    RepairFinding[] @relation("RepairDecidedBy")
   attendanceDrafts   AttendanceDraft[]
   reportSignatures   ReportSignature[] @relation("SignatureUpdatedBy")
+  sheetCustomFaculty SheetCustomFaculty[]
 
   @@map("users")
 }
@@ -99,6 +100,8 @@ model Faculty {
   updatedAt    DateTime       @updatedAt @map("updated_at")
   department   College?       @relation("FacultyDepartment", fields: [departmentId], references: [id], onDelete: SetNull)
   slots        ScheduleSlot[]
+  customSelections CustomFaculty[]
+  sheetCustomFaculty SheetCustomFaculty[]
 
   @@index([active])
   @@index([departmentId])
@@ -135,6 +138,7 @@ model Course {
   college    College?       @relation(fields: [collegeId], references: [id], onDelete: SetNull)
   slots      ScheduleSlot[]
   sessions   AttendanceSession[]
+  sheetCustomFaculty SheetCustomFaculty[]
 
   @@index([collegeId])
   @@map("courses")
@@ -452,3 +456,49 @@ model ReportSignature {
   @@index([updatedAt])
   @@map("report_signatures")
 }
+
+// ---------------------------------------------------------------------------
+// Custom faculty and daily sheet tracking
+// ---------------------------------------------------------------------------
+
+// Reusable pool of custom faculty selections.
+// Distinguishes master faculty records from those designated for manual sheet inclusion.
+model CustomFaculty {
+  id           Int                  @id @default(autoincrement())
+  facultyId    Int                  @unique @map("faculty_id")
+  notes        String?
+  createdAt    DateTime             @default(now()) @map("created_at")
+  updatedAt    DateTime             @updatedAt @map("updated_at")
+  faculty      Faculty              @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  sheetEntries SheetCustomFaculty[]
+
+  @@map("custom_faculty")
+}
+
+// Tracks faculty manually added to (or excluded from) a specific daily attendance print sheet.
+// Scoped by sheetKey (e.g. "sheet:2026-11-16:dept-CET:2026-2027:1st Semester") and date.
+model SheetCustomFaculty {
+  id              Int            @id @default(autoincrement())
+  sheetKey        String         @map("sheet_key")
+  date            DateTime       @db.Date
+  facultyId       Int            @map("faculty_id")
+  courseId        Int?           @map("course_id")
+  customFacultyId Int?           @map("custom_faculty_id")
+  // "CUSTOM_ADD": Manually added to this sheet
+  // "EXCLUDED": Excluded / removed from this sheet
+  action          String         @default("CUSTOM_ADD")
+  createdById     Int?           @map("created_by_id")
+  createdAt       DateTime       @default(now()) @map("created_at")
+  updatedAt       DateTime       @updatedAt @map("updated_at")
+  faculty         Faculty        @relation(fields: [facultyId], references: [id], onDelete: Cascade)
+  course          Course?        @relation(fields: [courseId], references: [id], onDelete: SetNull)
+  customFaculty   CustomFaculty? @relation(fields: [customFacultyId], references: [id], onDelete: SetNull)
+  createdBy       User?          @relation(fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@unique([sheetKey, facultyId])
+  @@index([sheetKey])
+  @@index([facultyId])
+  @@index([date])
+  @@map("sheet_custom_faculty")
+}
+

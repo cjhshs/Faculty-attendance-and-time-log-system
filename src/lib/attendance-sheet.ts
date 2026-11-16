@@ -10,6 +10,7 @@ export type SheetSlot = {
   facultyId: number | null;
   facultyName: string | null;
   surname: string | null;
+  isCustom?: boolean;
 };
 
 export type FacultyCell = { room: string; rowSpan: number } | "covered" | "empty";
@@ -18,6 +19,7 @@ export type FacultyColumn = {
   facultyId: number;
   label: string;
   cells: FacultyCell[]; // null = covered by the merged cell above
+  isCustom?: boolean;
 };
 
 export type ProgramSheet = {
@@ -52,11 +54,22 @@ export function buildProgramSheet(slots: SheetSlot[]): ProgramSheet {
 
   const hourSet = new Set<string>();
   for (const slot of assigned) {
-    for (const h of hoursOfRange(slot.start, slot.end)) hourSet.add(h);
+    if (slot.start && slot.end) {
+      for (const h of hoursOfRange(slot.start, slot.end)) hourSet.add(h);
+    }
   }
   const rows = Array.from(hourSet)
     .sort((a, b) => timeToMinutes(a) - timeToMinutes(b))
     .map(hourRangeLabel);
+
+  // If assigned faculty have no scheduled hours on this day (e.g. custom additions),
+  // provide standard operating hours (07:00 to 18:00) so a physical grid is printable.
+  if (rows.length === 0 && assigned.length > 0) {
+    for (let h = 7; h < 18; h++) {
+      const hh = `${String(h).padStart(2, "0")}:00`;
+      rows.push(hourRangeLabel(hh));
+    }
+  }
 
   const byFaculty = new Map<number, SheetSlot[]>();
   for (const slot of assigned) {
@@ -97,11 +110,21 @@ export function buildProgramSheet(slots: SheetSlot[]): ProgramSheet {
     // contributed by neighbouring classes, inventing hours and making every
     // program look like it had overlapping classes.
     const hoursBySlot = new Map<number, Set<string>>();
-    for (const slot of list) hoursBySlot.set(slot.id, new Set(hoursOfRange(slot.start, slot.end)));
+    for (const slot of list) {
+      if (!slot.start || !slot.end) {
+        hoursBySlot.set(slot.id, new Set());
+      } else {
+        hoursBySlot.set(slot.id, new Set(hoursOfRange(slot.start, slot.end)));
+      }
+    }
 
+    // Retrieve room assignment(s) for this hour. If the instructor has multiple room
+    // assignments, all unique rooms are displayed without arbitrarily choosing one.
     const roomForHour = (hour: string): string | null => {
-      const match = list.find((s) => hoursBySlot.get(s.id)!.has(hour));
-      return match ? match.roomCode : null;
+      const matches = list.filter((s) => hoursBySlot.get(s.id)!.has(hour));
+      if (matches.length === 0) return null;
+      const rooms = Array.from(new Set(matches.map((s) => s.roomCode).filter(Boolean)));
+      return rooms.length > 0 ? rooms.join(", ") : "TBA";
     };
 
     const cells: FacultyCell[] = [];
@@ -122,7 +145,8 @@ export function buildProgramSheet(slots: SheetSlot[]): ProgramSheet {
       i += span;
     }
 
-    return { facultyId, label, cells };
+    const isCustom = list.some((s) => s.isCustom);
+    return { facultyId, label, cells, isCustom };
   });
 
   return { rows, columns, unassigned, totalFaculty: columns.length };
