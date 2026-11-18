@@ -7,7 +7,12 @@ param(
     [switch]$Force = $true,
     [switch]$Zip,
     [switch]$CompileInstaller = $true,
-    [string]$OutputRoot
+    [string]$OutputRoot,
+    [string]$CertificateThumbprint,
+    [string]$CertificateSubject,
+    [string]$CertificateFilePath,
+    [string]$CertificatePassword,
+    [string]$TimestampServer = "http://timestamp.digicert.com"
 )
 
 $ErrorActionPreference = "Stop"
@@ -185,6 +190,44 @@ if ($CompileInstaller) {
         if (Test-Path -LiteralPath $installerExe) {
             $installerSize = (Get-Item -LiteralPath $installerExe).Length / 1MB
             Write-Host ("Installer successfully generated: {0} ({1:N2} MB)" -f $installerExe, $installerSize) -ForegroundColor Green
+
+            # -------------------------------------------------------------------
+            # Authenticode Code Signing Pipeline
+            # -------------------------------------------------------------------
+            Write-Host "Evaluating Authenticode Code Signing..." -ForegroundColor Cyan
+            $signingCert = $null
+            if ($CertificateThumbprint) {
+                $signingCert = Get-Item "Cert:\CurrentUser\My\$CertificateThumbprint" -ErrorAction SilentlyContinue
+                if (-not $signingCert) {
+                    $signingCert = Get-Item "Cert:\LocalMachine\My\$CertificateThumbprint" -ErrorAction SilentlyContinue
+                }
+            } elseif ($CertificateSubject) {
+                $signingCert = Get-ChildItem Cert:\CurrentUser\My, Cert:\LocalMachine\My -CodeSigningCert -ErrorAction SilentlyContinue |
+                    Where-Object { $_.Subject -like "*$CertificateSubject*" } | Select-Object -First 1
+            } elseif ($CertificateFilePath -and (Test-Path -LiteralPath $CertificateFilePath)) {
+                $secPassword = ConvertTo-SecureString $CertificatePassword -AsPlainText -Force
+                $signingCert = Get-PfxCertificate -FilePath $CertificateFilePath
+            } else {
+                # Check store for any valid non-expired Code Signing certificate
+                $signingCert = Get-ChildItem Cert:\CurrentUser\My, Cert:\LocalMachine\My -CodeSigningCert -ErrorAction SilentlyContinue |
+                    Where-Object { $_.NotAfter -gt (Get-Date) } | Select-Object -First 1
+            }
+
+            if ($signingCert) {
+                Write-Host "Signing $installerExe with certificate: $($signingCert.Subject)..."
+                try {
+                    $sig = Set-AuthenticodeSignature -FilePath $installerExe -Certificate $signingCert -TimestampServer $TimestampServer -HashAlgorithm SHA256
+                    if ($sig.Status -eq "Valid") {
+                        Write-Host "Authenticode Code Signing: VERIFIED (Status: $($sig.Status), Signer: $($signingCert.Subject))" -ForegroundColor Green
+                    } else {
+                        Write-Warning "Authenticode Code Signing: COMPLETED WITH WARNING (Status: $($sig.Status), Message: $($sig.StatusMessage))"
+                    }
+                } catch {
+                    Write-Warning "Authenticode Code Signing failed: $($_.Exception.Message)"
+                }
+            } else {
+                Write-Host "Authenticode Code Signing: PENDING (No valid trusted Code Signing certificate found in Windows certificate store. To sign for production, provide an authorized certificate via -CertificateThumbprint or install to Cert:\CurrentUser\My)." -ForegroundColor Yellow
+            }
         }
     }
 }

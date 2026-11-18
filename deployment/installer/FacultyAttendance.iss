@@ -72,13 +72,30 @@ begin
   end;
 end;
 
-function IsSimpleName(const S: String): Boolean;
+function CleanDbName(const S: String): String;
+var
+  T: String;
+  P: Integer;
+begin
+  T := Trim(S);
+  while (Length(T) > 0) and ((T[1] = '/') or (T[1] = '\')) do
+    Delete(T, 1, 1);
+  P := Pos('?', T);
+  if P > 0 then
+    T := Copy(T, 1, P - 1);
+  P := Pos('=', T);
+  if P > 0 then
+    T := Copy(T, 1, P - 1);
+  Result := Trim(T);
+end;
+
+function IsValidPostgresIdentifier(const S: String): Boolean;
 var
   I: Integer;
   C: Char;
 begin
   Result := False;
-  if S = '' then Exit;
+  if (S = '') or (Length(S) > 63) then Exit;
   C := S[1];
   if not ((C >= 'A') and (C <= 'Z')) and not ((C >= 'a') and (C <= 'z')) and (C <> '_') then Exit;
   for I := 2 to Length(S) do
@@ -121,6 +138,71 @@ begin
     else if C = #12 then Result := Result + '\f'
     else if C = #13 then Result := Result + '\r'
     else Result := Result + C;
+  end;
+end;
+
+procedure TryLoadExistingEnv;
+var
+  EnvPath: String;
+  Lines: TArrayOfString;
+  I, P: Integer;
+  Line, Key, Val: String;
+  SlashPos, AtPos, ColonPos, QuestPos: Integer;
+  DbUrl, HostPart, DbPart: String;
+begin
+  EnvPath := ExpandConstant('{commonappdata}\FacultyAttendance\app.env');
+  if not FileExists(EnvPath) then Exit;
+  if not LoadStringsFromFile(EnvPath, Lines) then Exit;
+  for I := 0 to GetArrayLength(Lines) - 1 do
+  begin
+    Line := Trim(Lines[I]);
+    if (Line = '') or (Line[1] = '#') then Continue;
+    P := Pos('=', Line);
+    if P <= 1 then Continue;
+    Key := Trim(Copy(Line, 1, P - 1));
+    Val := Trim(Copy(Line, P + 1, Length(Line) - P));
+    if (Length(Val) >= 2) and (Val[1] = '"') and (Val[Length(Val)] = '"') then
+      Val := Copy(Val, 2, Length(Val) - 2);
+
+    if Key = 'PORT' then
+      AppPage.Values[0] := Val
+    else if Key = 'DATABASE_URL' then
+    begin
+      DbUrl := Val;
+      QuestPos := Pos('?', DbUrl);
+      if QuestPos > 0 then
+        DbUrl := Copy(DbUrl, 1, QuestPos - 1);
+      SlashPos := 0;
+      for P := Length(DbUrl) downto 1 do
+      begin
+        if DbUrl[P] = '/' then
+        begin
+          SlashPos := P;
+          Break;
+        end;
+      end;
+      if SlashPos > 0 then
+      begin
+        DbPart := CleanDbName(Copy(DbUrl, SlashPos + 1, Length(DbUrl) - SlashPos));
+        if DbPart <> '' then
+          DbPage.Values[2] := DbPart;
+      end;
+      AtPos := Pos('@', DbUrl);
+      if (AtPos > 0) and (SlashPos > AtPos) then
+      begin
+        HostPart := Copy(DbUrl, AtPos + 1, SlashPos - AtPos - 1);
+        ColonPos := Pos(':', HostPart);
+        if ColonPos > 0 then
+        begin
+          DbPage.Values[0] := Copy(HostPart, 1, ColonPos - 1);
+          DbPage.Values[1] := Copy(HostPart, ColonPos + 1, Length(HostPart) - ColonPos);
+        end
+        else
+        begin
+          DbPage.Values[0] := HostPart;
+        end;
+      end;
+    end;
   end;
 end;
 
@@ -173,10 +255,15 @@ begin
   OptionPage.Values[0] := True;
   OptionPage.Values[1] := True;
   if IsUpgrade then
-    OptionPage.Values[2] := False
+  begin
+    OptionPage.Values[1] := False;
+    OptionPage.Values[2] := False;
+  end
   else
     OptionPage.Values[2] := True;
   OptionPage.Values[3] := True;
+
+  TryLoadExistingEnv;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -184,6 +271,7 @@ begin
   Result := True;
   if CurPageID = DbPage.ID then
   begin
+    DbPage.Values[2] := CleanDbName(DbPage.Values[2]);
     if Trim(DbPage.Values[0]) = '' then
     begin
       MsgBox('Database host is required.', mbError, MB_OK);
@@ -194,15 +282,27 @@ begin
       MsgBox('Database port must be between 1 and 65535.', mbError, MB_OK);
       Result := False;
     end
-    else if not IsSimpleName(Trim(DbPage.Values[2])) then
+    else if not IsValidPostgresIdentifier(DbPage.Values[2]) then
     begin
-      MsgBox('Database name must contain only letters, numbers, and underscores.', mbError, MB_OK);
+      MsgBox('Database name must be a valid PostgreSQL identifier (1 to 63 characters, starting with a letter or underscore, containing only letters, numbers, and underscores).' + #13#10 + #13#10 + 'Do not include slashes or parameters such as "?schema=public" in the database name.', mbError, MB_OK);
       Result := False;
     end
     else if Trim(DbPage.Values[3]) = '' then
     begin
       MsgBox('Database user is required.', mbError, MB_OK);
       Result := False;
+    end
+    else if DbPage.Values[4] = '' then
+    begin
+      MsgBox('Database password is required to connect to PostgreSQL.', mbError, MB_OK);
+      Result := False;
+    end
+    else if Lowercase(Trim(DbPage.Values[4])) = 'postgres' then
+    begin
+      if MsgBox('Using "postgres" as the database password is weak and not recommended for production.' + #13#10 + #13#10 + 'Are you sure you want to proceed with this password?', mbConfirmation, MB_YESNO or MB_DEFBUTTON2) <> IDYES then
+      begin
+        Result := False;
+      end;
     end;
   end
   else if CurPageID = AppPage.ID then
@@ -241,10 +341,11 @@ begin
 
   ConfigFile := ExpandConstant('{commonappdata}\FacultyAttendance\install.json');
   ForceDirectories(ExtractFileDir(ConfigFile));
+  DbPage.Values[2] := CleanDbName(DbPage.Values[2]);
   Json := '{"' +
     'DbHost":"' + JsonEscape(Trim(DbPage.Values[0])) + '",' +
     '"DbPort":' + IntToStr(StrToIntDef(DbPage.Values[1], 5432)) + ',' +
-    '"DbName":"' + JsonEscape(Trim(DbPage.Values[2])) + '",' +
+    '"DbName":"' + JsonEscape(DbPage.Values[2]) + '",' +
     '"DbUser":"' + JsonEscape(Trim(DbPage.Values[3])) + '",' +
     '"DbPassword":"' + JsonEscape(DbPage.Values[4]) + '",' +
     '"PostgresBin":"' + JsonEscape(Trim(DbPage.Values[5])) + '",' +

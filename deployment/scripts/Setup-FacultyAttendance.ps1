@@ -76,8 +76,19 @@ try {
 
     if ([string]::IsNullOrWhiteSpace($dbHost)) { throw "Database host is required." }
     if ($dbPort -lt 1 -or $dbPort -gt 65535) { throw "Invalid database port." }
-    if ($dbName -notmatch "^[A-Za-z_][A-Za-z0-9_]*$") { throw "Database name must contain only letters, numbers, and underscores." }
+    if ([string]::IsNullOrWhiteSpace($dbName)) { throw "Database name is required." }
+    $dbName = $dbName.Trim().TrimStart([char[]]@('/', '\')).Trim()
+    if ($dbName.Contains("?")) {
+        throw "Database name must not contain query parameters like '?schema=public'."
+    }
+    if ($dbName.Contains("=")) {
+        throw "Database name must not contain '='."
+    }
+    if ($dbName -notmatch "^[A-Za-z_][A-Za-z0-9_]{0,62}$") {
+        throw "Database name '$dbName' is invalid. It must be a valid PostgreSQL identifier (1 to 63 letters, numbers, and underscores, starting with a letter or underscore)."
+    }
     if ([string]::IsNullOrWhiteSpace($dbUser)) { throw "Database user is required." }
+    if ([string]::IsNullOrWhiteSpace($dbPassword)) { throw "Database password is required." }
     if ($appPort -lt 1 -or $appPort -gt 65535) { throw "Invalid application port." }
     if ($initialize -and ([string]::IsNullOrWhiteSpace($adminUser) -or [string]::IsNullOrWhiteSpace($adminPassword))) {
         throw "Initial administrator username and password are required when initializing a new database."
@@ -91,6 +102,19 @@ try {
 
     $env:PGPASSWORD = $dbPassword
     $env:PGCONNECT_TIMEOUT = "15"
+
+    Write-FacultyLog -Message "Verifying PostgreSQL authentication for user '$dbUser' at $dbHost`:$dbPort" -LogPath $setupLog
+    try {
+        $authCheck = Invoke-Psql -Psql $psql -Arguments @("-h", $dbHost, "-p", $dbPort, "-U", $dbUser, "-d", "postgres", "-tAc", "SELECT 1;") 2>&1
+        if (($authCheck | Out-String).Trim() -ne "1") {
+            throw "Unexpected response from database during authentication check."
+        }
+        Write-FacultyLog -Message "PostgreSQL authentication successful." -LogPath $setupLog
+    }
+    catch {
+        throw "PostgreSQL authentication failed for user '$dbUser' at $dbHost`:$dbPort. Please verify your database credentials."
+    }
+
     Write-FacultyLog -Message "Checking database $dbHost`:$dbPort/$dbName" -LogPath $setupLog
 
     $databaseExists = $false
@@ -115,10 +139,34 @@ try {
         throw "Database backup failed. Migration was not attempted."
     }
 
-    $encodedUser = [Uri]::EscapeDataString($dbUser)
-    $encodedPassword = [Uri]::EscapeDataString($dbPassword)
-    $databaseUrl = "postgresql://$encodedUser`:$encodedPassword@$dbHost`:$dbPort/$dbName?schema=public"
+    $encodedUser = [System.Uri]::EscapeDataString($dbUser)
+    $encodedPassword = [System.Uri]::EscapeDataString($dbPassword)
+    $encodedHost = [System.Uri]::EscapeDataString($dbHost)
+    $databaseUrl = "postgresql://${encodedUser}:${encodedPassword}@${encodedHost}:${dbPort}/${dbName}?schema=public"
     $env:DATABASE_URL = $databaseUrl
+
+    # In-memory validation of constructed DATABASE_URL
+    try {
+        $parsedUri = [System.Uri]$databaseUrl
+        $extractedDb = $parsedUri.AbsolutePath.TrimStart("/")
+        if ($extractedDb -ne $dbName) {
+            throw "DATABASE_URL verification failed: extracted database name '$extractedDb' does not match expected '$dbName'."
+        }
+        if ($parsedUri.Host -ne $dbHost) {
+            throw "DATABASE_URL verification failed: extracted host '$($parsedUri.Host)' does not match expected '$dbHost'."
+        }
+        if ($parsedUri.Port -ne $dbPort) {
+            throw "DATABASE_URL verification failed: extracted port $($parsedUri.Port) does not match expected $dbPort."
+        }
+        if ($parsedUri.Query -notmatch "(^|\?|&)schema=public(&|$)") {
+            throw "DATABASE_URL verification failed: query parameter '?schema=public' is missing or malformed."
+        }
+        $redactedUrl = "postgresql://${encodedUser}:****@${encodedHost}:${dbPort}/${dbName}?schema=public"
+        Write-FacultyLog -Message "DATABASE_URL verified: $redactedUrl" -LogPath $setupLog
+    }
+    catch {
+        throw "DATABASE_URL validation error: $($_.Exception.Message)"
+    }
 
     $node = Get-FacultyNodePath
     $prismaCli = Join-Path $appRoot "node_modules\prisma\build\index.js"
@@ -128,12 +176,21 @@ try {
     & $node $prismaCli migrate deploy --schema (Join-Path $appRoot "prisma\schema.prisma")
     if ($LASTEXITCODE -ne 0) { throw "Prisma migrate deploy failed. Restore the pre-install backup if needed." }
 
-    $userCountOutput = Invoke-Psql -Psql $psql -Arguments @("-h", $dbHost, "-p", $dbPort, "-U", $dbUser, "-d", $dbName, "-tAc", "SELECT CASE WHEN to_regclass('public.users') IS NULL THEN 0 ELSE (SELECT count(*) FROM users) END;")
-    $userCount = [int](($userCountOutput | Out-String).Trim())
+    $hasUsersOutput = Invoke-Psql -Psql $psql -Arguments @("-h", $dbHost, "-p", $dbPort, "-U", $dbUser, "-d", $dbName, "-tAc", "SELECT count(*) FROM pg_tables WHERE schemaname='public' AND tablename='users';")
+    $hasUsers = (($hasUsersOutput | Out-String).Trim() -eq "1")
+
+    $userCount = 0
+    if ($hasUsers) {
+        $userCountOutput = Invoke-Psql -Psql $psql -Arguments @("-h", $dbHost, "-p", $dbPort, "-U", $dbUser, "-d", $dbName, "-tAc", "SELECT count(*) FROM public.users;")
+        $trimmedCount = ($userCountOutput | Out-String).Trim()
+        if ($trimmedCount -match "^\d+$") {
+            $userCount = [int]$trimmedCount
+        }
+    }
 
     if ($initialize) {
         if ($userCount -gt 0) {
-            Write-FacultyLog -Message "Initialization requested but users already exist; seeding was skipped." -LogPath $setupLog
+            Write-FacultyLog -Message "Initialization requested but users table already has $userCount user(s); seeding was skipped to preserve existing data." -LogPath $setupLog
         }
         else {
             $tsxCli = Join-Path $appRoot "node_modules\tsx\dist\cli.mjs"
@@ -164,6 +221,22 @@ try {
     }
     Write-EnvFile -Path $appConfigPath -Values $values
     Write-FacultyLog -Message "Runtime configuration written to $appConfigPath" -LogPath $setupLog
+
+    # Post-write verification on disk
+    $writtenEnv = Read-FacultyEnvFile -Path $appConfigPath
+    if (-not $writtenEnv.ContainsKey("DATABASE_URL") -or [string]::IsNullOrWhiteSpace($writtenEnv["DATABASE_URL"])) {
+        throw "Verification failed: DATABASE_URL was not written to $appConfigPath."
+    }
+    $diskUri = [System.Uri]$writtenEnv["DATABASE_URL"]
+    $diskDb = $diskUri.AbsolutePath.TrimStart("/")
+    if ($diskDb -ne $dbName) {
+        throw "Verification failed: Written DATABASE_URL in $appConfigPath contains '$diskDb' instead of '$dbName'."
+    }
+    if ($diskUri.Query -notmatch "(^|\?|&)schema=public(&|$)") {
+        throw "Verification failed: Written DATABASE_URL in $appConfigPath does not contain '?schema=public'."
+    }
+    $redactedDiskUrl = "postgresql://${encodedUser}:****@${encodedHost}:${dbPort}/${dbName}?schema=public"
+    Write-FacultyLog -Message "Verified configuration file on disk: DATABASE_URL=$redactedDiskUrl" -LogPath $setupLog
 
     $startScript = Join-Path $root "scripts\windows\Start-FacultyAttendance.ps1"
     $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`""

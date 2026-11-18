@@ -67,14 +67,13 @@ switch ($Action) {
         return
     }
     "Restart" {
-        Write-Host "Restarting Faculty Attendance system..." -ForegroundColor Cyan
-        Stop-FacultyService -ConfigPath $ConfigPath
-        $ok = Start-FacultyServiceInstance -ConfigPath $ConfigPath
+        Write-Host "Restarting Faculty Attendance application..." -ForegroundColor Cyan
+        $ok = Restart-FacultyApplication -ConfigPath $ConfigPath
         if ($ok) {
-            Write-Host "System restarted successfully." -ForegroundColor Green
+            Write-Host "Application restarted successfully." -ForegroundColor Green
             Show-ManagerCli
         } else {
-            Write-Error "System restart failed. Check logs in C:\ProgramData\FacultyAttendance\logs."
+            Write-Error "Application restart failed. Check logs in C:\ProgramData\FacultyAttendance\logs."
         }
         return
     }
@@ -347,10 +346,9 @@ $btnStop.Add_Click({
 $btnRestart.Add_Click({
     $form.Cursor = [System.Windows.Forms.Cursors]::WaitCursor
     try {
-        Stop-FacultyService -ConfigPath $ConfigPath
-        $ok = Start-FacultyServiceInstance -ConfigPath $ConfigPath
+        $ok = Restart-FacultyApplication -ConfigPath $ConfigPath
         if (-not $ok) {
-            [System.Windows.Forms.MessageBox]::Show("The service restarted, but did not complete health check. Check logs.", "Restart Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
+            [System.Windows.Forms.MessageBox]::Show("The application process was restarted, but did not respond with HTTP 200 within timeout. Check logs in C:\ProgramData\FacultyAttendance\logs for details.", "Restart Warning", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Warning)
         }
     } catch {
         [System.Windows.Forms.MessageBox]::Show($_.Exception.Message, "Restart Error", [System.Windows.Forms.MessageBoxButtons]::OK, [System.Windows.Forms.MessageBoxIcon]::Error)

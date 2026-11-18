@@ -223,41 +223,120 @@ function Get-FacultyServiceStatus {
     return [PSCustomObject]$result
 }
 
+function Test-FacultyProcessBelongsToApp {
+    param(
+        [Parameter(Mandatory = $true)][int]$ProcessId,
+        [string]$AppRoot
+    )
+    if ($ProcessId -le 4) { return $false }
+    try {
+        $procInfo = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction SilentlyContinue
+        if (-not $procInfo) { return $false }
+
+        $cmd = [string]$procInfo.CommandLine
+        $exe = [string]$procInfo.ExecutablePath
+
+        $installRoot = Get-FacultyInstallRoot
+        $bundledNode = Join-Path $installRoot "runtime\node.exe"
+        if ($exe) {
+            if ($exe -eq $bundledNode) { return $true }
+            if (Test-Path -LiteralPath $bundledNode -PathType Leaf) {
+                $exeItem = Get-Item $exe -ErrorAction SilentlyContinue
+                $bundledItem = Get-Item $bundledNode -ErrorAction SilentlyContinue
+                if ($exeItem -and $bundledItem -and $exeItem.FullName -eq $bundledItem.FullName) {
+                    return $true
+                }
+            }
+        }
+
+        if ($AppRoot -and $cmd -match [regex]::Escape($AppRoot)) {
+            return $true
+        }
+        if ($installRoot -and $cmd -match [regex]::Escape($installRoot)) {
+            return $true
+        }
+
+        if ($cmd -match "FacultyAttendance" -or $cmd -match "Start-FacultyAttendance" -or $cmd -match "node_modules\\next\\dist\\bin\\next") {
+            return $true
+        }
+
+        return $false
+    }
+    catch {
+        return $false
+    }
+}
+
 function Stop-FacultyService {
     param(
         [string]$ConfigPath = (Join-Path $env:ProgramData "FacultyAttendance\app.env"),
-        [string]$TaskName = "FacultyAttendance"
+        [string]$TaskName = "FacultyAttendance",
+        [int]$WaitPortTimeoutSeconds = 15
     )
 
     $resolvedConfig = Get-FacultyConfigPath -Path $ConfigPath
     $dataRoot = Split-Path -Parent $resolvedConfig
     $stopFlag = Join-Path $dataRoot "stop.flag"
+    $appRoot = Join-Path (Get-FacultyInstallRoot) "app"
 
-    # Set stop flag to instruct Start-FacultyAttendance loop to terminate
+    # Step 1: Set stop flag to instruct Start-FacultyAttendance loop to terminate
     if (Test-Path -LiteralPath $dataRoot) {
         New-Item -ItemType File -Force -Path $stopFlag | Out-Null
     }
 
+    # Step 2: Stop scheduled task if present
     $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     if ($task) {
         Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
     }
 
-    # If an orphaned node.exe process is still holding the port, terminate it
+    # Step 3: Determine application port from actual configuration
+    $port = 3000
     if (Test-Path -LiteralPath $resolvedConfig) {
         try {
             $config = Read-FacultyEnvFile -Path $resolvedConfig
-            $port = if ($config.ContainsKey("PORT")) { [int]$config["PORT"] } else { 3000 }
-            $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
-            foreach ($conn in $conns) {
-                if ($conn.OwningProcess -and $conn.OwningProcess -gt 4) {
-                    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
-                }
-            }
+            if ($config.ContainsKey("PORT")) { $port = [int]$config["PORT"] }
         } catch { }
     }
 
-    Start-Sleep -Seconds 2
+    # Step 4: Terminate any verified node.exe listening on that port
+    $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    foreach ($conn in $conns) {
+        $pidToStop = $conn.OwningProcess
+        if ($pidToStop -and $pidToStop -gt 4) {
+            if (Test-FacultyProcessBelongsToApp -ProcessId $pidToStop -AppRoot $appRoot) {
+                Write-FacultyLog -Message "Terminating verified application process PID $pidToStop on port $port" -LogPath (Join-Path $dataRoot "logs\startup.log")
+                Stop-Process -Id $pidToStop -Force -ErrorAction SilentlyContinue
+            } else {
+                Write-Warning "Port $port is held by process PID $pidToStop, which does not appear to belong to Faculty Attendance. Leaving it untouched."
+            }
+        }
+    }
+
+    # Step 5: Terminate any orphaned PowerShell wrapper running Start-FacultyAttendance.ps1
+    $orphanedWrappers = Get-CimInstance Win32_Process -Filter "Name LIKE '%powershell%'" -ErrorAction SilentlyContinue |
+        Where-Object { $_.CommandLine -match "Start-FacultyAttendance" }
+    foreach ($wrapper in $orphanedWrappers) {
+        if ($wrapper.ProcessId -ne $PID -and (Test-FacultyProcessBelongsToApp -ProcessId $wrapper.ProcessId -AppRoot $appRoot)) {
+            Stop-Process -Id $wrapper.ProcessId -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    # Step 6: Verify application port is completely released
+    $deadline = (Get-Date).AddSeconds($WaitPortTimeoutSeconds)
+    do {
+        Start-Sleep -Milliseconds 500
+        $remaining = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    } while ($remaining -and (Get-Date) -lt $deadline)
+
+    if ($remaining) {
+        $remainingPid = ($remaining | Select-Object -First 1).OwningProcess
+        if (Test-FacultyProcessBelongsToApp -ProcessId $remainingPid -AppRoot $appRoot) {
+            Stop-Process -Id $remainingPid -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Seconds 1
+        }
+    }
+
     if (Test-Path -LiteralPath $stopFlag) {
         Remove-Item -LiteralPath $stopFlag -Force -ErrorAction SilentlyContinue
     }
@@ -303,4 +382,43 @@ function Start-FacultyServiceInstance {
     }
 
     return $ready
+}
+
+function Restart-FacultyApplication {
+    param(
+        [string]$ConfigPath = (Join-Path $env:ProgramData "FacultyAttendance\app.env"),
+        [string]$TaskName = "FacultyAttendance",
+        [int]$TimeoutSeconds = 45
+    )
+
+    $resolvedConfig = Get-FacultyConfigPath -Path $ConfigPath
+    $dataRoot = Split-Path -Parent $resolvedConfig
+    $logPath = Join-Path $dataRoot "logs\startup.log"
+
+    Write-FacultyLog -Message "Executing genuine application restart operation" -LogPath $logPath
+
+    # 1. Stop service thoroughly (kills old verified Node process, waits for port release)
+    Stop-FacultyService -ConfigPath $ConfigPath -TaskName $TaskName
+
+    # 2. Verify port is not occupied
+    $port = 3000
+    if (Test-Path -LiteralPath $resolvedConfig) {
+        try {
+            $config = Read-FacultyEnvFile -Path $resolvedConfig
+            if ($config.ContainsKey("PORT")) { $port = [int]$config["PORT"] }
+        } catch { }
+    }
+    $stillOccupied = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+    if ($stillOccupied) {
+        throw "Cannot restart: Port $port is still in use by PID $(($stillOccupied | Select-Object -First 1).OwningProcess)."
+    }
+
+    # 3. Start application and wait for HTTP 200 health check
+    $ok = Start-FacultyServiceInstance -ConfigPath $ConfigPath -TaskName $TaskName -TimeoutSeconds $TimeoutSeconds
+    if ($ok) {
+        Write-FacultyLog -Message "Application successfully restarted and responding on port $port" -LogPath $logPath
+    } else {
+        Write-FacultyLog -Message "Application restart: Service started but failed health check on port $port within $TimeoutSeconds seconds" -LogPath $logPath
+    }
+    return $ok
 }
