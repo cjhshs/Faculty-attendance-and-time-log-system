@@ -49,6 +49,28 @@ The seed creates a Dean account using `SEED_DEAN_USERNAME` / `SEED_DEAN_PASSWORD
 (defaults: `dean` / `Dean@12345`). The account is flagged `mustChangePassword`, so you are
 asked to set a new password at first sign-in.
 
+## Windows Installer & Production Deployment
+
+For non-developer computers, use the standalone Windows deployment package located in [`deployment/`](file:///f:/faculty-attendance-next/deployment):
+
+1. **Installer**: Run `deployment/Faculty-Attendance-Installer.exe` as Administrator.
+2. **Bundled Runtime**: Includes Node.js x64 runtime; target host does not require Node.js or development tools.
+3. **Database**: Detects or connects to local PostgreSQL, runs migrations safely, and seeds initial data.
+4. **Automatic Service**: Automatically runs on boot as a Windows background service (`FacultyAttendance-Web`).
+5. **Control Panel**: Desktop shortcut **Faculty Attendance Control Panel** provides Start, Stop, Restart, Status, and Backup controls.
+6. **Local & LAN Access**:
+   - Host PC: `http://localhost:3000/`
+   - LAN PCs: `http://<HOST-IP>:3000/` (LAN IPv4 is automatically detected and displayed in the Control Panel).
+7. **Backups**: Automatically runs daily backups at 02:00 AM with 30-day retention under `C:\ProgramData\FacultyAttendance\backups\daily\`.
+
+For comprehensive instructions, see:
+- [Installation Guide](file:///f:/faculty-attendance-next/deployment/docs/INSTALLATION-GUIDE.md)
+- [LAN Access Guide](file:///f:/faculty-attendance-next/deployment/docs/LAN-ACCESS-GUIDE.md)
+- [Backup and Recovery](file:///f:/faculty-attendance-next/deployment/docs/BACKUP-AND-RECOVERY.md)
+- [Troubleshooting Guide](file:///f:/faculty-attendance-next/deployment/docs/TROUBLESHOOTING.md)
+
+---
+
 ## Daily use
 1. **Schedule** – import the Excel schedule and review the parsed slots.
 2. **Attendance print** – print the blank daily sheets for a date.
