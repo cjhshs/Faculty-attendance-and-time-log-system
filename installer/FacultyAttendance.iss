@@ -342,6 +342,11 @@ begin
   ConfigFile := ExpandConstant('{commonappdata}\FacultyAttendance\install.json');
   ForceDirectories(ExtractFileDir(ConfigFile));
   DbPage.Values[2] := CleanDbName(DbPage.Values[2]);
+  if not IsValidPostgresIdentifier(DbPage.Values[2]) then
+  begin
+    MsgBox('Database name is invalid. It must be a valid PostgreSQL identifier (1 to 63 characters, starting with a letter or underscore, containing only letters, numbers, and underscores).', mbError, MB_OK);
+    Abort;
+  end;
   Json := '{"' +
     'DbHost":"' + JsonEscape(Trim(DbPage.Values[0])) + '",' +
     '"DbPort":' + IntToStr(StrToIntDef(DbPage.Values[1], 5432)) + ',' +

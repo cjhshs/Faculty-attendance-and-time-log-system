@@ -145,6 +145,13 @@ try {
     $databaseUrl = "postgresql://${encodedUser}:${encodedPassword}@${encodedHost}:${dbPort}/${dbName}?schema=public"
     $env:DATABASE_URL = $databaseUrl
 
+    # Hard assertion: the final URL must target a valid database identifier.
+    # This guards against regressions such as ".../=public" or a missing DB name.
+    $databaseUrlPattern = '^postgres(?:ql)?://[^/@]+@[^/]+/[A-Za-z_][A-Za-z0-9_]*(?:\?.*)?$'
+    if ($databaseUrl -notmatch $databaseUrlPattern) {
+        throw "DATABASE_URL validation error: the constructed connection string is malformed and must be postgresql://<user>:<password>@<host>:<port>/<database>?schema=public."
+    }
+
     # In-memory validation of constructed DATABASE_URL
     try {
         $parsedUri = [System.Uri]$databaseUrl
@@ -195,12 +202,44 @@ try {
         else {
             $tsxCli = Join-Path $appRoot "node_modules\tsx\dist\cli.mjs"
             if (-not (Test-Path -LiteralPath $tsxCli -PathType Leaf)) { throw "tsx CLI not found; cannot initialize reference data." }
+            $seedScript = Join-Path $appRoot "prisma\seed.ts"
+            $seedLog = Join-Path $logDir "seed.log"
+
             $env:SEED_DEAN_USERNAME = $adminUser
             $env:SEED_DEAN_PASSWORD = $adminPassword
+
             Write-FacultyLog -Message "Initializing reference data and first administrator" -LogPath $setupLog
-            & $node $tsxCli (Join-Path $appRoot "prisma\seed.ts")
-            if ($LASTEXITCODE -ne 0) { throw "Database initialization failed. Migrations and the pre-install backup remain available." }
+            Write-FacultyLog -Message "Running seed from working directory $appRoot" -LogPath $setupLog
+
+            # The seed and its imported modules resolve TypeScript path aliases
+            # (for example @/lib/permissions) through app\tsconfig.json. tsx locates
+            # that tsconfig from the working directory, so the seed MUST run with
+            # appRoot as the current directory rather than the install root.
+            $seedExitCode = 1
+            Push-Location $appRoot
+            try {
+                $seedOutput = & $node $tsxCli $seedScript 2>&1 | Out-String
+                $seedExitCode = $LASTEXITCODE
+            }
+            finally {
+                Pop-Location
+            }
+
+            # Always capture seed stdout/stderr so failures are diagnosable.
+            if (-not [string]::IsNullOrWhiteSpace($seedOutput)) {
+                foreach ($seedLine in ($seedOutput -split "\r?\n")) {
+                    if ($seedLine.Trim().Length -gt 0) {
+                        Add-Content -LiteralPath $seedLog -Value ("{0:yyyy-MM-dd HH:mm:ss} {1}" -f (Get-Date), $seedLine)
+                        Write-FacultyLog -Message "seed: $seedLine" -LogPath $setupLog
+                    }
+                }
+            }
+
             Remove-Item Env:SEED_DEAN_USERNAME, Env:SEED_DEAN_PASSWORD -ErrorAction SilentlyContinue
+
+            if ($seedExitCode -ne 0) {
+                throw "Database initialization failed (seed exit code $seedExitCode). Migrations and the pre-install backup remain available. Seed output was written to $seedLog."
+            }
         }
     }
     elseif ($userCount -eq 0) {
@@ -231,6 +270,9 @@ try {
     $diskDb = $diskUri.AbsolutePath.TrimStart("/")
     if ($diskDb -ne $dbName) {
         throw "Verification failed: Written DATABASE_URL in $appConfigPath contains '$diskDb' instead of '$dbName'."
+    }
+    if ($writtenEnv["DATABASE_URL"] -notmatch '^postgres(?:ql)?://[^/@]+@[^/]+/[A-Za-z_][A-Za-z0-9_]*(?:\?.*)?$') {
+        throw "Verification failed: Written DATABASE_URL in $appConfigPath is malformed."
     }
     if ($diskUri.Query -notmatch "(^|\?|&)schema=public(&|$)") {
         throw "Verification failed: Written DATABASE_URL in $appConfigPath does not contain '?schema=public'."
