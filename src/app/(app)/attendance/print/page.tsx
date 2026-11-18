@@ -29,6 +29,7 @@ import {
   getCustomFacultyForSheet,
   getExcludedFacultyIdsForSheet,
 } from "@/lib/custom-sheet-faculty";
+import { getQualifiedFacultyIdsForCourse } from "@/lib/subject-classification";
 import { weekdayOfDate } from "@/lib/schedule-query";
 import { termWhere } from "@/lib/terms";
 import { AttendanceSheets, type SheetCourse } from "../AttendanceSheets";
@@ -154,29 +155,30 @@ export default async function PrintPage({
   const excludedNotice = clamped?.reason ?? null;
   const boundaryWarning = periodRangeWarning(period, rangeStart, rangeEnd);
 
-  const scope = normalizeScopeSelection(collegeOptions, { college: params.college });
-
-  // Legacy program narrowing is only used when no department is selected.
-  const courses = !department && scope.college
-    ? allCourses.filter((c) =>
-        scope.college === "unassigned"
-          ? c.collegeId == null
-          : c.college?.code === scope.college,
-      )
-    : allCourses;
-  const allCodes = courses.map((c) => c.code);
+  // Course/program selection is primary (Rule A & B).
+  // When a college/department is selected, retrieve its associated programs through the existing
+  // Course-to-College database relationship without hardcoding.
+  let targetCourses = allCourses;
+  if (department) {
+    if (department === "unassigned") {
+      targetCourses = allCourses.filter((c) => c.collegeId == null);
+    } else {
+      targetCourses = allCourses.filter(
+        (c) => c.college?.code.toUpperCase() === department.toUpperCase(),
+      );
+    }
+  }
 
   const rawPrograms = params.programs;
-  const selectedCodes = department
-    ? []
-    : rawPrograms === undefined
-      ? params.listed
-        ? []
-        : allCodes
-      : (Array.isArray(rawPrograms) ? rawPrograms : [rawPrograms]).filter((c) =>
-          allCodes.includes(c),
-        );
-  const selectedCourses = courses.filter((c) => selectedCodes.includes(c.code));
+  if (rawPrograms !== undefined) {
+    const requestedCodes = (Array.isArray(rawPrograms) ? rawPrograms : [rawPrograms]).filter(Boolean);
+    if (requestedCodes.length > 0) {
+      targetCourses = targetCourses.filter((c) => requestedCodes.includes(c.code));
+    }
+  }
+
+  const selectedCourses = targetCourses;
+  const selectedCodes = selectedCourses.map((c) => c.code);
 
   // Load every requested day. Each query is scoped to the selected term, so a
   // sheet can never mix schedules from another school year or semester.
@@ -186,7 +188,7 @@ export default async function PrintPage({
     const daySheetKey = buildSheetKey({
       date,
       department: department || null,
-      programs: department ? [] : selectedCodes,
+      programs: selectedCodes,
       schoolYear: selectedTerm.schoolYear,
       semester: selectedTerm.semester,
     });
@@ -206,22 +208,17 @@ export default async function PrintPage({
 
     const rawSlots = holiday
       ? []
-      : department
-        ? await getSlotsForDateAndDepartment(date, department, selectedTerm)
-        : await getSlotsForDateAndCourses(
-            date,
-            selectedCourses.map((c) => c.id),
-            selectedTerm,
-          );
+      : await getSlotsForDateAndCourses(
+          date,
+          selectedCourses.map((c) => c.id),
+          selectedTerm,
+        );
 
     // Filter out faculty members who were explicitly excluded from this sheet
     const activeSlots = rawSlots.filter(
       (s) => s.facultyId == null || !excludedIds.has(s.facultyId),
     );
 
-    // Department membership is enforced from the roster, not the program. Slots
-    // without a faculty member cannot be attributed to a department and are
-    // reported for review instead of being guessed.
     const reviewSlots = activeSlots.filter((s) => s.facultyId == null);
     const slots = activeSlots.filter((s) => s.facultyId != null);
 
@@ -250,31 +247,48 @@ export default async function PrintPage({
       }
     >();
 
-    for (const slot of slots) {
-      const course = slot.course;
-      if (!grouped.has(slot.courseId)) {
-        grouped.set(slot.courseId, {
+    // Major-Subject-Based Faculty Identification (Rule B):
+    // For each course, evaluate which instructors automatically qualify based on
+    // teaching at least one Major/Professional subject in this course.
+    const manuallyAddedIds = new Set(customEntries.map((c) => c.facultyId));
+
+    for (const course of selectedCourses) {
+      const courseSlots = slots.filter((s) => s.courseId === course.id);
+      const qualifiedFacultyIds = getQualifiedFacultyIdsForCourse(
+        courseSlots,
+        course.code,
+        {
+          manuallyAddedFacultyIds: manuallyAddedIds,
+          excludedFacultyIds: excludedIds,
+        },
+      );
+
+      const qualifiedSlots = courseSlots.filter(
+        (s) => s.facultyId != null && qualifiedFacultyIds.has(s.facultyId),
+      );
+
+      if (qualifiedSlots.length > 0 || selectedCourses.length === 1) {
+        grouped.set(course.id, {
           course: {
             id: course.id,
             code: course.code,
             name: course.name,
             collegeName: course.college?.name ?? null,
           },
-          slots: [],
+          slots: qualifiedSlots.map((slot) => ({
+            id: slot.id,
+            cn: slot.cn,
+            subject: slot.subject,
+            start: slot.startTime,
+            end: slot.endTime,
+            roomCode: overrideBySlot.get(slot.id) ?? slot.room.code,
+            facultyId: slot.facultyId,
+            facultyName: slot.faculty?.fullName ?? null,
+            surname: slot.faculty?.surname ?? null,
+            isCustom: false,
+          })),
         });
       }
-      grouped.get(slot.courseId)!.slots.push({
-        id: slot.id,
-        cn: slot.cn,
-        subject: slot.subject,
-        start: slot.startTime,
-        end: slot.endTime,
-        roomCode: overrideBySlot.get(slot.id) ?? slot.room.code,
-        facultyId: slot.facultyId,
-        facultyName: slot.faculty?.fullName ?? null,
-        surname: slot.faculty?.surname ?? null,
-        isCustom: false,
-      });
     }
 
     // Retrieve schedule slots and room information for manually added custom faculty
@@ -331,18 +345,23 @@ export default async function PrintPage({
               slots: [],
             });
           }
-          grouped.get(courseId)!.slots.push({
-            id: slot.id,
-            cn: slot.cn,
-            subject: slot.subject,
-            start: slot.startTime,
-            end: slot.endTime,
-            roomCode: customOverrideBySlot.get(slot.id) ?? slot.room.code,
-            facultyId: faculty.id,
-            facultyName: faculty.fullName,
-            surname: faculty.surname,
-            isCustom: true,
-          });
+          const existingSlot = grouped.get(courseId)!.slots.find((s) => s.id === slot.id);
+          if (!existingSlot) {
+            grouped.get(courseId)!.slots.push({
+              id: slot.id,
+              cn: slot.cn,
+              subject: slot.subject,
+              start: slot.startTime,
+              end: slot.endTime,
+              roomCode: customOverrideBySlot.get(slot.id) ?? slot.room.code,
+              facultyId: faculty.id,
+              facultyName: faculty.fullName,
+              surname: faculty.surname,
+              isCustom: true,
+            });
+          } else {
+            existingSlot.isCustom = true;
+          }
         }
       } else {
         // Faculty has no schedule on this day: display empty cells rather than inventing a room
@@ -499,15 +518,14 @@ export default async function PrintPage({
     semester: selectedTerm.semester,
   });
 
-  const scopeLabel = department
-    ? department === "unassigned"
-      ? "Faculty without a registered department"
-      : `${department} — ${collegeOptions.colleges.find((c) => c.code === department)?.name ?? ""}`
-    : scope.college
-      ? scope.college === "unassigned"
-        ? "Unassigned programs"
-        : `${scope.college} — ${collegeOptions.colleges.find((c) => c.code === scope.college)?.name ?? ""}`
-      : "All colleges";
+  const collegeCode = department || (params.college ?? "").trim();
+  const scopeLabel = collegeCode
+    ? collegeCode === "unassigned"
+      ? "Programs without a college"
+      : `${collegeCode} — ${collegeOptions.colleges.find((c) => c.code === collegeCode)?.name ?? ""}`
+    : selectedCodes.length > 0 && selectedCodes.length < allCourses.length
+      ? `Programs: ${selectedCodes.join(", ")}`
+      : "All colleges / all programs";
 
   const years = Array.from(new Set(periods.map((p) => p.schoolYear)));
   if (!years.includes(selectedTerm.schoolYear)) years.push(selectedTerm.schoolYear);

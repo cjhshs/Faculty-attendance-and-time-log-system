@@ -242,8 +242,8 @@ describe("Deterministic Faculty Department Identification", () => {
       expect(plan.summary.departmentBreakdown.unassigned).toBe(1); // Unassigned, Teacher
     });
 
-    it("filters slots by faculty registered department, preserving CET faculty teaching NSTP in CET", () => {
-      const cetSlot: PlannedSlot = {
+    it("filters slots by course/program attribution (Rule A), where Excel Course column determines program and college ownership", () => {
+      const bsitGeSlot: PlannedSlot = {
         rowNumber: 2,
         cn: "1002",
         subject: "NSTP1",
@@ -251,7 +251,7 @@ describe("Deterministic Faculty Department Identification", () => {
         units: 3,
         section: "B",
         yearLevel: "1",
-        courseCode: "NSTP",
+        courseCode: "BSIT", // GE/NSTP subject under BSIT remains BSIT schedule (Rule A)
         instructorRaw: "Abueme, Kimberly Kate",
         facultyName: "Abueme, Kimberly Kate",
         facultyDepartment: "CET",
@@ -269,22 +269,41 @@ describe("Deterministic Faculty Department Identification", () => {
         messages: [],
       };
 
-      const cbeSlot: PlannedSlot = {
-        ...cetSlot,
+      const bsitCbeFacultySlot: PlannedSlot = {
+        ...bsitGeSlot,
         cn: "1003",
-        courseCode: "BSIT", // CBE instructor teaching a BSIT subject
+        subject: "CC101",
+        courseCode: "BSIT", // CBE instructor teaching a BSIT subject belongs to BSIT
         instructorRaw: "Santos, Maria Cbe",
         facultyName: "Santos, Maria Cbe",
         facultyDepartment: "CBE",
       };
 
-      // When scope is CET:
-      expect(slotInScope(cetSlot, { college: "CET" })).toBe(true);
+      const cbeSlot: PlannedSlot = {
+        ...bsitGeSlot,
+        cn: "1004",
+        subject: "TM101",
+        courseCode: "BSTM", // Belongs to CBE program (Tourism Management)
+        instructorRaw: "Dela Cruz, Juan P.",
+        facultyName: "Dela Cruz, Juan P.",
+        facultyDepartment: "CET",
+      };
+
+      // Under Rule A: Excel Course column determines ownership
+      // Both BSIT slots belong to CET (and BSIT), regardless of instructor department
+      expect(slotInScope(bsitGeSlot, { college: "CET" })).toBe(true);
+      expect(slotInScope(bsitCbeFacultySlot, { college: "CET" })).toBe(true);
       expect(slotInScope(cbeSlot, { college: "CET" })).toBe(false);
 
-      // When scope is CBE:
-      expect(slotInScope(cetSlot, { college: "CBE" })).toBe(false);
+      // BSTM slot belongs to CBE
+      expect(slotInScope(bsitGeSlot, { college: "CBE" })).toBe(false);
+      expect(slotInScope(bsitCbeFacultySlot, { college: "CBE" })).toBe(false);
       expect(slotInScope(cbeSlot, { college: "CBE" })).toBe(true);
+
+      // Program-level scoping
+      expect(slotInScope(bsitGeSlot, { program: "BSIT" })).toBe(true);
+      expect(slotInScope(bsitCbeFacultySlot, { program: "BSIT" })).toBe(true);
+      expect(slotInScope(cbeSlot, { program: "BSIT" })).toBe(false);
     });
   });
 

@@ -50,10 +50,12 @@ export async function GET(request: Request) {
   const course = scope.program
     ? { code: scope.program, name: collegeOptions.all.find((p) => p.code === scope.program)?.name ?? null }
     : null;
-  const scopedCourseIds = departmentCode
-    ? null
-    : scope.program
-      ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
+  const scopedCourseIds = scope.program
+    ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
+    : departmentCode
+      ? departmentCode === "unassigned"
+        ? collegeOptions.unassigned.map((p) => p.id)
+        : collegeOptions.colleges.find((c) => c.code.toUpperCase() === departmentCode.toUpperCase())?.programs.map((p) => p.id) ?? []
       : scope.college === "unassigned"
         ? collegeOptions.unassigned.map((p) => p.id)
         : scope.college

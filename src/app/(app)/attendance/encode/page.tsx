@@ -19,6 +19,12 @@ import { parseDraftPayload, attendanceDraftScopeKey } from "@/lib/attendance-dra
 import { CollegeCourseFilter } from "../../CollegeCourseFilter";
 import { EncodeClient, type EncodeRow, type EncodeColumn, type EncodeCell } from "./EncodeClient";
 import { PersistForm } from "../../PersistForm";
+import {
+  buildSheetKey,
+  getCustomFacultyForSheet,
+  getExcludedFacultyIdsForSheet,
+} from "@/lib/custom-sheet-faculty";
+import { getQualifiedFacultyIdsForCourse } from "@/lib/subject-classification";
 
 export default async function EncodePage({
   searchParams,
@@ -110,15 +116,21 @@ export default async function EncodePage({
             ? c.collegeId == null
             : c.college?.code === scope.college,
         )
-      : allCourses;
-  const selected = department ? null : pool[0];
+      : department
+        ? allCourses.filter((c) =>
+            department === "unassigned"
+              ? c.collegeId == null
+              : c.college?.code.toUpperCase() === department.toUpperCase(),
+          )
+        : allCourses;
+  const selected = pool[0];
 
-  if (!department && !selected) {
+  if (!selected) {
     return (
       <div className="space-y-4">
         <h1 className="page-title">Encode Attendance</h1>
         <p className="page-subtitle">
-          {scope.college || scope.program
+          {scope.college || scope.program || department
             ? "No programs match the selected college/course. Choose another scope or clear the filter."
             : "No programs available. Import a schedule first."}
         </p>
@@ -132,11 +144,10 @@ export default async function EncodePage({
   const isPast = date < todayUtc();
   const canEditPast = hasPermission(user, PERMISSIONS.ATTENDANCE_EDIT_PAST);
 
-  const slots = department
-    ? await getSlotsForDateAndDepartment(date, department, selectedTerm)
-    : await getSlotsForDateAndCourses(date, [selected!.id], selectedTerm);
+  // Retrieve course-based schedules for the selected program
+  const slots = await getSlotsForDateAndCourses(date, [selected.id], selectedTerm);
 
-  const courseIds = Array.from(new Set(slots.map((s) => s.courseId)));
+  const courseIds = [selected.id];
   const [existing, savedSessions, holiday] = await Promise.all([
     slots.length
       ? prisma.attendance.findMany({
@@ -155,7 +166,35 @@ export default async function EncodePage({
 
   const savedSession = savedSessions[0] ?? null;
 
-  const sheetSlots: SheetSlot[] = slots.map((s) => ({
+  // Retrieve custom faculty and exclusions to mirror the printed physical sheet
+  const daySheetKey = buildSheetKey({
+    date,
+    department: scope.college || department || null,
+    programs: [selected.code],
+    schoolYear: selectedTerm.schoolYear,
+    semester: selectedTerm.semester,
+  });
+
+  const [excludedIds, customEntries] = await Promise.all([
+    getExcludedFacultyIdsForSheet(daySheetKey),
+    getCustomFacultyForSheet(daySheetKey),
+  ]);
+
+  const manuallyAddedIds = new Set(customEntries.map((c) => c.facultyId));
+  const qualifiedFacultyIds = getQualifiedFacultyIdsForCourse(
+    slots,
+    selected.code,
+    {
+      manuallyAddedFacultyIds: manuallyAddedIds,
+      excludedFacultyIds: excludedIds,
+    },
+  );
+
+  const activeSlots = slots.filter(
+    (s) => s.facultyId != null && qualifiedFacultyIds.has(s.facultyId),
+  );
+
+  const sheetSlots: SheetSlot[] = activeSlots.map((s) => ({
     id: s.id,
     cn: s.cn,
     subject: s.subject,
@@ -166,6 +205,26 @@ export default async function EncodePage({
     facultyName: s.faculty?.fullName ?? null,
     surname: s.faculty?.surname ?? null,
   }));
+
+  // Include custom faculty without schedule as placeholder columns
+  for (const customEntry of customEntries) {
+    if (excludedIds.has(customEntry.facultyId)) continue;
+    const hasSlots = sheetSlots.some((s) => s.facultyId === customEntry.facultyId);
+    if (!hasSlots) {
+      sheetSlots.push({
+        id: -customEntry.faculty.id,
+        cn: "CUSTOM",
+        subject: "CUSTOM",
+        start: "",
+        end: "",
+        roomCode: "",
+        facultyId: customEntry.faculty.id,
+        facultyName: customEntry.faculty.fullName,
+        surname: customEntry.faculty.surname,
+        isCustom: true,
+      });
+    }
+  }
 
   const sheet = buildProgramSheet(sheetSlots);
 

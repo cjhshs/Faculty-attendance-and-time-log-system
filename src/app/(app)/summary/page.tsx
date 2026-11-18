@@ -70,10 +70,16 @@ export default async function SummaryPage({
     program: params.program,
   });
   const course = scope.program ? courses.find((c) => c.code === scope.program) : undefined;
-  const scopedCourseIds = department
-    ? null
-    : scope.program
-      ? courses.filter((c) => c.code === scope.program).map((c) => c.id)
+  const scopedCourseIds = scope.program
+    ? courses.filter((c) => c.code === scope.program).map((c) => c.id)
+    : department
+      ? courses
+          .filter((c) =>
+            department === "unassigned"
+              ? c.collegeId == null
+              : c.college?.code.toUpperCase() === department.toUpperCase(),
+          )
+          .map((c) => c.id)
       : scope.college === "unassigned"
         ? courses.filter((c) => c.collegeId == null).map((c) => c.id)
         : scope.college

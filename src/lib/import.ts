@@ -973,25 +973,14 @@ function buildProgramMapping(rows: Record<string, unknown>[], slots: PlannedSlot
     );
 }
 
-// Whether a row falls inside the selected college/program scope. Programs that
-// are not in the catalog count as unassigned.
+// Whether a row falls inside the selected college/program scope. Course-based
+// schedule attribution (Rule A): the Excel Course column determines ownership.
 export function slotInScope(
   target: string | { courseCode: string; facultyDepartment?: string | null },
   scope?: ImportScope | null,
 ): boolean {
   if (!scope) return true;
-  if (typeof target === "object" && target !== null) {
-    if (scope.program) {
-      return normalizeCourseCode(target.courseCode) === normalizeCourseCode(scope.program);
-    }
-    const college = (scope.college ?? "").trim();
-    if (!college) return true;
-    if (college === UNASSIGNED_COLLEGE_VALUE) {
-      return !target.facultyDepartment;
-    }
-    return (target.facultyDepartment ?? "").toUpperCase() === college.toUpperCase();
-  }
-  const courseCode = target;
+  const courseCode = typeof target === "object" && target !== null ? target.courseCode : target;
   const key = normalizeCourseCode(courseCode);
   const program = normalizeCourseCode(scope.program ?? "");
   if (program) return key === program;

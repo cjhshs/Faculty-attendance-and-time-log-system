@@ -53,23 +53,26 @@ export function AttendancePicker({
     <div className="space-y-2">
       <div>
         <label className="label" htmlFor="print-department">
-          Department (faculty roster)
+          College / Department
         </label>
         <select
           id="print-department"
           name="department"
           className="input"
           value={selectedDepartment}
-          onChange={(e) => setSelectedDepartment(e.target.value)}
+          onChange={(e) => {
+            setSelectedDepartment(e.target.value);
+            setChecked(new Set());
+          }}
         >
-          <option value="">All departments / all programs</option>
+          <option value="">All colleges / all programs</option>
           {colleges.map((c) => (
             <option key={c.code} value={c.code}>
               {c.code} — {c.name}
             </option>
           ))}
           {unassigned.length > 0 ? (
-            <option value="unassigned">Faculty without a department</option>
+            <option value="unassigned">Programs without a college</option>
           ) : null}
         </select>
       </div>
@@ -77,21 +80,67 @@ export function AttendancePicker({
       <input type="hidden" name="listed" value="1" />
 
       {selectedDepartment ? (
-        <div className="rounded-lg border border-line bg-slate-50 px-4 py-3 text-xs text-muted">
-          <p>
-            <strong className="text-ink">
-              {selectedDepartment === "unassigned"
-                ? "Faculty without a registered department"
-                : selectedDepartment}
-            </strong>{" "}
-            — every program taught by these faculty is included, even when the subject belongs to
-            another student course. Non-department teachers are excluded.
-          </p>
-          {departmentPrograms.length > 0 ? (
-            <p className="mt-1">
-              Programs linked to this department:{" "}
-              {departmentPrograms.map((p) => p.code).join(", ")}
+        <div className="space-y-3">
+          <div className="rounded-lg border border-line bg-slate-50 px-4 py-3 text-xs text-muted">
+            <p>
+              <strong className="text-ink">
+                {selectedDepartment === "unassigned"
+                  ? "Programs without a college"
+                  : selectedDepartment}
+              </strong>{" "}
+              — Course-based attendance sheets for programs in this college. Each program sheet
+              includes faculty who teach its major/professional subjects, plus custom additions.
             </p>
+            {departmentPrograms.length > 0 ? (
+              <p className="mt-1">
+                Programs linked to this college:{" "}
+                {departmentPrograms.map((p) => p.code).join(", ")}
+              </p>
+            ) : null}
+          </div>
+
+          {departmentPrograms.length > 1 ? (
+            <div className="space-y-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <p className="label mb-0 text-xs">Filter programs in {selectedDepartment} (optional):</p>
+                <button
+                  type="button"
+                  className="text-xs underline text-navy"
+                  onClick={() =>
+                    setChecked(
+                      new Set(
+                        checked.size > 0 ? [] : departmentPrograms.map((p) => p.code),
+                      ),
+                    )
+                  }
+                >
+                  {checked.size > 0 ? "Clear selection" : "Select all"}
+                </button>
+                <span className="text-xs text-muted">
+                  {checked.size > 0 ? `${checked.size} selected` : "All programs included"}
+                </span>
+              </div>
+              <div className="flex max-h-28 flex-wrap gap-x-4 gap-y-2 overflow-auto rounded-lg border border-line bg-white px-3 py-2">
+                {departmentPrograms.map((p) => (
+                  <label key={p.code} className="flex items-center gap-2 text-xs">
+                    <input
+                      type="checkbox"
+                      name="programs"
+                      value={p.code}
+                      checked={checked.has(p.code)}
+                      onChange={(e) => {
+                        const next = new Set(checked);
+                        if (e.target.checked) next.add(p.code);
+                        else next.delete(p.code);
+                        setChecked(next);
+                      }}
+                    />
+                    <span className="font-medium text-ink">{p.code}</span>
+                    {p.name ? <span className="text-muted">({p.name})</span> : null}
+                  </label>
+                ))}
+              </div>
+            </div>
           ) : null}
         </div>
       ) : (

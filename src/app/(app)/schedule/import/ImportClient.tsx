@@ -479,8 +479,7 @@ function PlanView({
   const scopeSlots = plan.slots.filter((slot) => {
     if (scopeProgram) return slot.courseCode === scopeProgram;
     if (!scopeCollege) return true;
-    if (scopeCollege === "unassigned") return !slot.facultyDepartment;
-    return (slot.facultyDepartment ?? "").toUpperCase() === scopeCollege.toUpperCase();
+    return scopeCodes.has(slot.courseCode);
   });
   const scopeNewSlots = scopeSlots.filter((slot) => slot.status === "new");
   const scopeUpdatedSlots = scopeSlots.filter((slot) => slot.status === "update");

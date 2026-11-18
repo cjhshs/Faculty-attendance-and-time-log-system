@@ -40,10 +40,12 @@ export default async function SummaryPrintPage({
   const course = scope.program
     ? { code: scope.program, name: collegeOptions.all.find((p) => p.code === scope.program)?.name ?? null }
     : null;
-  const scopedCourseIds = department
-    ? null
-    : scope.program
-      ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
+  const scopedCourseIds = scope.program
+    ? collegeOptions.all.filter((p) => p.code === scope.program).map((p) => p.id)
+    : department
+      ? department === "unassigned"
+        ? collegeOptions.unassigned.map((p) => p.id)
+        : collegeOptions.colleges.find((c) => c.code.toUpperCase() === department.toUpperCase())?.programs.map((p) => p.id) ?? []
       : scope.college === "unassigned"
         ? collegeOptions.unassigned.map((p) => p.id)
         : scope.college
