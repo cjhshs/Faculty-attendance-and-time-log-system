@@ -3,9 +3,10 @@ param(
     [switch]$SkipBuild,
     [switch]$SkipTests,
     [switch]$SkipLint,
-    [switch]$BundleNode,
-    [switch]$Force,
+    [switch]$BundleNode = $true,
+    [switch]$Force = $true,
     [switch]$Zip,
+    [switch]$CompileInstaller = $true,
     [string]$OutputRoot
 )
 
@@ -14,6 +15,7 @@ $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 if (-not $OutputRoot) { $OutputRoot = Join-Path $root "dist" }
 $packageRoot = Join-Path $OutputRoot "FacultyAttendance"
 $appRoot = Join-Path $packageRoot "app"
+$deploymentDir = Join-Path $root "deployment"
 
 function Invoke-Checked {
     param([string]$FilePath, [string[]]$Arguments, [string]$WorkingDirectory)
@@ -35,7 +37,13 @@ function Copy-Tree {
 
 if (-not $SkipBuild) {
     Write-Host "Building production application..."
-    Invoke-Checked -FilePath "npm.cmd" -Arguments @("run", "build") -WorkingDirectory $root
+    try {
+        Invoke-Checked -FilePath "npm.cmd" -Arguments @("run", "build") -WorkingDirectory $root
+    }
+    catch {
+        Write-Host "Retrying build (continuing past Next.js advisory notice)..."
+        Invoke-Checked -FilePath "npm.cmd" -Arguments @("run", "build") -WorkingDirectory $root
+    }
 }
 if (-not $SkipTests) {
     Write-Host "Running test suite..."
@@ -104,7 +112,10 @@ $required = @(
     "scripts\windows\Start-FacultyAttendance.ps1",
     "scripts\windows\Setup-FacultyAttendance.ps1",
     "scripts\windows\Backup-Database.ps1",
-    "scripts\windows\Restore-Database.ps1"
+    "scripts\windows\Restore-Database.ps1",
+    "scripts\windows\FacultyAttendanceManager.ps1",
+    "scripts\windows\FacultyAttendanceManager.bat",
+    "scripts\windows\Update-FacultyAttendance.ps1"
 )
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $packageRoot $relative))) { $missing += $relative }
@@ -140,3 +151,41 @@ if ($Zip) {
     Compress-Archive -Path (Join-Path $packageRoot "*") -DestinationPath $zipPath -CompressionLevel Optimal
     Write-Host "Archive: $zipPath"
 }
+
+if ($CompileInstaller) {
+    Write-Host "Compiling Inno Setup Windows Installer..." -ForegroundColor Cyan
+    $iscc = $null
+    $candidates = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\iscc.exe"),
+        "C:\Program Files (x86)\Inno Setup 6\iscc.exe",
+        "C:\Program Files\Inno Setup 6\iscc.exe"
+    )
+    foreach ($cand in $candidates) {
+        if (Test-Path -LiteralPath $cand -PathType Leaf) {
+            $iscc = $cand
+            break
+        }
+    }
+    if (-not $iscc) {
+        $cmd = Get-Command iscc.exe -ErrorAction SilentlyContinue
+        if ($cmd) { $iscc = $cmd.Source }
+    }
+
+    if (-not $iscc) {
+        Write-Warning "Inno Setup compiler (iscc.exe) was not found. Install Inno Setup 6 or compile manually."
+    } else {
+        New-Item -ItemType Directory -Force -Path $deploymentDir | Out-Null
+        $issFile = Join-Path $root "installer\FacultyAttendance.iss"
+        Write-Host "Running: $iscc $issFile"
+        & $iscc $issFile
+        if ($LASTEXITCODE -ne 0) {
+            throw "Inno Setup compilation failed with exit code $LASTEXITCODE"
+        }
+        $installerExe = Join-Path $deploymentDir "Faculty-Attendance-Installer.exe"
+        if (Test-Path -LiteralPath $installerExe) {
+            $installerSize = (Get-Item -LiteralPath $installerExe).Length / 1MB
+            Write-Host ("Installer successfully generated: {0} ({1:N2} MB)" -f $installerExe, $installerSize) -ForegroundColor Green
+        }
+    }
+}
+

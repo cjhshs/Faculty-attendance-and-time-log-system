@@ -1,7 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   getQualifiedFacultyIdsForCourse,
-  isMajorSubjectForCourse,
 } from "@/lib/subject-classification";
 import {
   buildProgramSheet,

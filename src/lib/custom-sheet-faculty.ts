@@ -1,7 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { weekdayOfDate } from "@/lib/schedule-query";
 import { termWhere, type Term } from "@/lib/terms";
-import { normalizeFacultyName } from "@/lib/faculty-department";
 
 export type SheetScopeInput = {
   date: string | Date; // YYYY-MM-DD or Date
@@ -49,7 +48,6 @@ export async function searchFacultyForSheet(
   currentSheetFacultyIds: number[] = [],
 ): Promise<FacultySearchResult[]> {
   const q = query.trim();
-  const normalizedQ = normalizeFacultyName(q);
   const currentSet = new Set(currentSheetFacultyIds);
 
   // If query is empty, surface existing reusable custom faculty first

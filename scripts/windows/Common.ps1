@@ -154,3 +154,153 @@ function Get-FacultyNodePath {
     if ($command) { return $command.Source }
     throw "Node.js was not found. Reinstall the application with its bundled runtime or install Node.js 22/24 LTS."
 }
+
+function Get-FacultyLocalIPv4Addresses {
+    try {
+        $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
+            Select-Object -ExpandProperty IPAddress
+        return @($ips)
+    }
+    catch {
+        return @()
+    }
+}
+
+function Get-FacultyServiceStatus {
+    param(
+        [string]$ConfigPath = (Join-Path $env:ProgramData "FacultyAttendance\app.env"),
+        [string]$TaskName = "FacultyAttendance"
+    )
+
+    $result = [ordered]@{
+        Installed = $false
+        Running = $false
+        TaskState = "NotFound"
+        Port = 3000
+        BindAddress = "0.0.0.0"
+        ProcessId = $null
+        LocalUrl = "http://localhost:3000/"
+        LanUrls = @()
+        Database = ""
+    }
+
+    $resolvedConfig = Get-FacultyConfigPath -Path $ConfigPath
+    if (Test-Path -LiteralPath $resolvedConfig) {
+        $result.Installed = $true
+        try {
+            $config = Read-FacultyEnvFile -Path $resolvedConfig
+            if ($config.ContainsKey("PORT")) { $result.Port = [int]$config["PORT"] }
+            if ($config.ContainsKey("BIND_ADDRESS")) { $result.BindAddress = $config["BIND_ADDRESS"] }
+            if ($config.ContainsKey("DATABASE_URL")) {
+                try {
+                    $u = [Uri]$config["DATABASE_URL"]
+                    $result.Database = "$($u.Host):$($u.Port)$($u.AbsolutePath)"
+                } catch { }
+            }
+        } catch { }
+    }
+
+    $result.LocalUrl = "http://localhost:$($result.Port)/"
+    $lanIps = Get-FacultyLocalIPv4Addresses
+    $result.LanUrls = @($lanIps | ForEach-Object { "http://$($_):$($result.Port)/" })
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        $result.TaskState = [string]$task.State
+    }
+
+    # Check whether port is listening and find PID
+    $portConnections = Get-NetTCPConnection -LocalPort $result.Port -State Listen -ErrorAction SilentlyContinue
+    if ($portConnections) {
+        $result.Running = $true
+        $result.ProcessId = ($portConnections | Select-Object -First 1).OwningProcess
+    } elseif ($task -and $task.State -eq "Running") {
+        # Task is running but port not yet bound (starting up)
+        $result.Running = $true
+    }
+
+    return [PSCustomObject]$result
+}
+
+function Stop-FacultyService {
+    param(
+        [string]$ConfigPath = (Join-Path $env:ProgramData "FacultyAttendance\app.env"),
+        [string]$TaskName = "FacultyAttendance"
+    )
+
+    $resolvedConfig = Get-FacultyConfigPath -Path $ConfigPath
+    $dataRoot = Split-Path -Parent $resolvedConfig
+    $stopFlag = Join-Path $dataRoot "stop.flag"
+
+    # Set stop flag to instruct Start-FacultyAttendance loop to terminate
+    if (Test-Path -LiteralPath $dataRoot) {
+        New-Item -ItemType File -Force -Path $stopFlag | Out-Null
+    }
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    }
+
+    # If an orphaned node.exe process is still holding the port, terminate it
+    if (Test-Path -LiteralPath $resolvedConfig) {
+        try {
+            $config = Read-FacultyEnvFile -Path $resolvedConfig
+            $port = if ($config.ContainsKey("PORT")) { [int]$config["PORT"] } else { 3000 }
+            $conns = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue
+            foreach ($conn in $conns) {
+                if ($conn.OwningProcess -and $conn.OwningProcess -gt 4) {
+                    Stop-Process -Id $conn.OwningProcess -Force -ErrorAction SilentlyContinue
+                }
+            }
+        } catch { }
+    }
+
+    Start-Sleep -Seconds 2
+    if (Test-Path -LiteralPath $stopFlag) {
+        Remove-Item -LiteralPath $stopFlag -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Start-FacultyServiceInstance {
+    param(
+        [string]$ConfigPath = (Join-Path $env:ProgramData "FacultyAttendance\app.env"),
+        [string]$TaskName = "FacultyAttendance",
+        [int]$TimeoutSeconds = 45
+    )
+
+    $resolvedConfig = Get-FacultyConfigPath -Path $ConfigPath
+    $dataRoot = Split-Path -Parent $resolvedConfig
+    $stopFlag = Join-Path $dataRoot "stop.flag"
+    if (Test-Path -LiteralPath $stopFlag) {
+        Remove-Item -LiteralPath $stopFlag -Force -ErrorAction SilentlyContinue
+    }
+
+    $config = Read-FacultyEnvFile -Path $resolvedConfig
+    $port = if ($config.ContainsKey("PORT")) { [int]$config["PORT"] } else { 3000 }
+
+    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    if ($task) {
+        Start-ScheduledTask -TaskName $TaskName
+    } else {
+        # Fallback if task is not installed: start hidden background process directly
+        $startScript = Join-Path (Get-FacultyInstallRoot) "scripts\windows\Start-FacultyAttendance.ps1"
+        $arguments = "-NoProfile -ExecutionPolicy Bypass -File `"$startScript`""
+        Start-Process -FilePath "powershell.exe" -ArgumentList $arguments -WindowStyle Hidden
+    }
+
+    $ready = $false
+    for ($i = 0; $i -lt $TimeoutSeconds; $i += 2) {
+        Start-Sleep -Seconds 2
+        try {
+            $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/login" -UseBasicParsing -TimeoutSec 3
+            if ($resp.StatusCode -eq 200) {
+                $ready = $true
+                break
+            }
+        } catch { }
+    }
+
+    return $ready
+}

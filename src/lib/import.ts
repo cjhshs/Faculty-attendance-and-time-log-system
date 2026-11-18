@@ -4,7 +4,6 @@ import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/l
 import {
   facultyNameKey,
   nameSimilarity,
-  normalizeFacultyName,
   resolveFacultyDepartmentFromRoster,
   type RosterFaculty,
 } from "@/lib/faculty-department";

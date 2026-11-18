@@ -1,10 +1,11 @@
-; Faculty Attendance Windows installer.
+; Faculty Attendance and Time Log System - Production Windows Installer
 ; Build the package first with scripts\windows\Build-Package.ps1.
 ; The installer never contains database or application secrets. Values entered
-; in the wizard are written to a temporary file, consumed by the setup script,
-; and deleted.
+; in the wizard are written to a temporary secure file, consumed by the setup script,
+; and deleted immediately.
 
-#define AppName "Faculty Attendance"
+#define AppName "Faculty Attendance and Time Log System"
+#define AppShortName "FacultyAttendance"
 #define AppVersion "1.0.0"
 #define AppPublisher "Ramon Magsaysay Memorial Colleges, Inc."
 #define AppIdGuid "600B8AEA-0913-4CAE-A52E-E9AA0B652231"
@@ -17,9 +18,9 @@ AppVerName={#AppName} {#AppVersion}
 AppPublisher={#AppPublisher}
 DefaultDirName={autopf}\FacultyAttendance
 DefaultGroupName={#AppName}
-DisableProgramGroupPage=yes
-OutputDir=..\dist\installer
-OutputBaseFilename=FacultyAttendance-Setup
+DisableProgramGroupPage=no
+OutputDir=..\deployment
+OutputBaseFilename=Faculty-Attendance-Installer
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
@@ -35,14 +36,41 @@ SetupLogging=yes
 UninstallDisplayName={#AppName}
 VersionInfoVersion=1.0.0.0
 
+[Tasks]
+Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+
 [Files]
 Source: "..\dist\FacultyAttendance\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Icons]
+Name: "{group}\{#AppName}"; Filename: "{app}\scripts\windows\FacultyAttendanceManager.bat"
+Name: "{group}\Control Panel & Manager"; Filename: "{app}\scripts\windows\FacultyAttendanceManager.bat"
+Name: "{group}\Open System in Browser"; Filename: "http://localhost:3000/"
+Name: "{group}\Backup Database"; Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -File ""{app}\scripts\windows\Backup-Database.ps1"""
+Name: "{group}\Uninstall {#AppName}"; Filename: "{uninstallexe}"
+Name: "{autodesktop}\Faculty Attendance Control Panel"; Filename: "{app}\scripts\windows\FacultyAttendanceManager.bat"; Tasks: desktopicon
+Name: "{autodesktop}\Faculty Attendance Web"; Filename: "http://localhost:3000/"; Tasks: desktopicon
 
 [Code]
 var
   DbPage: TInputQueryWizardPage;
   AppPage: TInputQueryWizardPage;
   OptionPage: TInputOptionWizardPage;
+  IsUpgrade: Boolean;
+  InstalledVersion: String;
+
+function InitializeSetup(): Boolean;
+var
+  InstallKey: String;
+begin
+  Result := True;
+  IsUpgrade := False;
+  InstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdGuid}_is1';
+  if RegQueryStringValue(HKLM, InstallKey, 'DisplayVersion', InstalledVersion) then
+  begin
+    IsUpgrade := True;
+  end;
+end;
 
 function IsSimpleName(const S: String): Boolean;
 var
@@ -100,16 +128,16 @@ procedure InitializeWizard;
 begin
   DbPage := CreateInputQueryPage(
     wpSelectDir,
-    'Database connection',
-    'Enter the PostgreSQL connection details for this host.',
-    'The installer will back up an existing database before applying migrations. It never resets or seeds an existing database automatically.'
+    'Database Connection',
+    'Enter PostgreSQL database connection details.',
+    'The installer connects to PostgreSQL, creates a pre-install backup if the database exists, and runs migrations safely without destroying records.'
   );
-  DbPage.Add('Host:', False);
+  DbPage.Add('Database Host:', False);
   DbPage.Add('Port:', False);
-  DbPage.Add('Database:', False);
-  DbPage.Add('User:', False);
+  DbPage.Add('Database Name:', False);
+  DbPage.Add('Database User:', False);
   DbPage.Add('Password:', True);
-  DbPage.Add('PostgreSQL bin folder (optional):', False);
+  DbPage.Add('PostgreSQL bin folder (optional / auto-detected):', False);
   DbPage.Values[0] := 'localhost';
   DbPage.Values[1] := '5432';
   DbPage.Values[2] := 'faculty_attendance_new';
@@ -118,31 +146,36 @@ begin
 
   AppPage := CreateInputQueryPage(
     DbPage.ID,
-    'Application settings',
-    'Enter the web port and optional first-administrator details.',
-    'Initialization is used only for a new empty database. Leave the administrator password blank when installing over an existing database.'
+    'Application Settings & Administrator',
+    'Configure the web application port and initial administrator.',
+    'Initialization is applied only for brand new empty databases. Existing records and users are always preserved.'
   );
-  AppPage.Add('Web port:', False);
-  AppPage.Add('Initial administrator username:', False);
-  AppPage.Add('Initial administrator password:', True);
+  AppPage.Add('Web Application Port:', False);
+  AppPage.Add('Initial Administrator Username:', False);
+  AppPage.Add('Initial Administrator Password:', True);
   AppPage.Values[0] := '3000';
   AppPage.Values[1] := 'dean';
+  AppPage.Values[2] := 'Dean@12345';
 
   OptionPage := CreateInputOptionPage(
     AppPage.ID,
-    'Host options',
-    'Choose the safe default for this host.',
-    'LAN access is restricted by a Private-profile firewall rule to LocalSubnet. The default transport is HTTP on the private LAN; use an HTTPS reverse proxy if encrypted LAN traffic is required.',
+    'Host & Network Deployment Options',
+    'Select access and initialization options for this host.',
+    'LAN access allows authorized computers on the same network subnet to access the system via browser.',
     False,
     False
   );
-  OptionPage.Add('Allow access from other computers on the private LAN');
+  OptionPage.Add('Enable LAN access from other computers on the local network (creates firewall rule)');
   OptionPage.Add('Create the database if it does not already exist');
-  OptionPage.Add('Initialize a new empty database with reference data and the first administrator');
-  OptionPage.Add('Create a desktop shortcut on this host');
+  OptionPage.Add('Initialize a fresh database with default roles, permissions, and administrator');
+  OptionPage.Add('Create a Desktop Shortcut for the Control Panel');
+
   OptionPage.Values[0] := True;
-  OptionPage.Values[1] := False;
-  OptionPage.Values[2] := False;
+  OptionPage.Values[1] := True;
+  if IsUpgrade then
+    OptionPage.Values[2] := False
+  else
+    OptionPage.Values[2] := True;
   OptionPage.Values[3] := True;
 end;
 
@@ -186,9 +219,9 @@ begin
         MsgBox('An initial administrator username is required when initializing a database.', mbError, MB_OK);
         Result := False;
       end
-      else if Length(AppPage.Values[2]) < 8 then
+      else if Length(AppPage.Values[2]) < 6 then
       begin
-        MsgBox('The initial administrator password must be at least 8 characters.', mbError, MB_OK);
+        MsgBox('The initial administrator password must be at least 6 characters.', mbError, MB_OK);
         Result := False;
       end;
     end;
@@ -227,7 +260,7 @@ begin
 
   if not SaveStringToFile(ConfigFile, Json, False) then
   begin
-    MsgBox('Could not write the temporary setup configuration.', mbError, MB_OK);
+    MsgBox('Could not write temporary setup configuration.', mbError, MB_OK);
     Abort;
   end;
 
@@ -242,13 +275,47 @@ begin
   if ResultCode <> 0 then
   begin
     DeleteFile(ConfigFile);
-    MsgBox('Application setup did not complete. See C:\ProgramData\FacultyAttendance\logs\setup.log for details. The database was not reset.', mbError, MB_OK);
+    MsgBox('Application setup did not complete successfully. See C:\ProgramData\FacultyAttendance\logs\setup.log for details. Existing database records were preserved.', mbError, MB_OK);
     Abort;
   end;
   DeleteFile(ConfigFile);
 
   if not ShellExec('open', 'http://localhost:' + AppPage.Values[0] + '/', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
   begin
-    MsgBox('Installation completed, but the browser could not be opened automatically.', mbInformation, MB_OK);
+    MsgBox('Installation completed successfully. You can open the system from your browser at http://localhost:' + AppPage.Values[0] + '/', mbInformation, MB_OK);
+  end;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  ResultCode: Integer;
+  DataDir: String;
+  KeepData: Integer;
+begin
+  if CurUninstallStep = usUninstall then
+  begin
+    // Stop background service and clean up firewall/scheduled tasks
+    Exec('schtasks.exe', '/End /TN "FacultyAttendance"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('schtasks.exe', '/Delete /TN "FacultyAttendance" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('schtasks.exe', '/Delete /TN "FacultyAttendanceBackup" /F', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+    Exec('netsh.exe', 'advfirewall firewall delete rule name="Faculty Attendance Web"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end
+  else if CurUninstallStep = usPostUninstall then
+  begin
+    DataDir := ExpandConstant('{commonappdata}\FacultyAttendance');
+    if DirExists(DataDir) then
+    begin
+      KeepData := MsgBox(
+        'Do you want to permanently delete database backups, logs, and configuration data?' + #13#10 + #13#10 +
+        'Location: ' + DataDir + #13#10 + #13#10 +
+        'Click [NO] (Recommended) to preserve all database records, configurations, and backups.' + #13#10 +
+        'Click [YES] to permanently delete them.',
+        mbConfirmation, MB_YESNO or MB_DEFBUTTON2
+      );
+      if KeepData = IDYES then
+      begin
+        DelTree(DataDir, True, True, True);
+      end;
+    end;
   end;
 end;

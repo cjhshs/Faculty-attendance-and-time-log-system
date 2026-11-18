@@ -2,10 +2,10 @@ import Link from "next/link";
 import { requirePermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getCourses } from "@/lib/data";
-import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
+import { getCollegeOptions } from "@/lib/colleges";
 import { getSettings } from "@/lib/settings";
 import { prisma } from "@/lib/prisma";
-import { getSlotsForDateAndCourses, getSlotsForDateAndDepartment } from "@/lib/schedule-query";
+import { getSlotsForDateAndCourses } from "@/lib/schedule-query";
 import {
   daysBetweenInclusive,
   eachDate,

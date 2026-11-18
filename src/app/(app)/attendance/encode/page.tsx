@@ -4,7 +4,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { getCourses } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
-import { getSlotsForDateAndCourses, getSlotsForDateAndDepartment } from "@/lib/schedule-query";
+import { getSlotsForDateAndCourses } from "@/lib/schedule-query";
 import { buildProgramSheet, type SheetSlot } from "@/lib/attendance-sheet";
 import { formatISODate, formatLong, getTodayLocalDate, hoursOfRange, parseISODate, todayUtc } from "@/lib/dates";
 import { getActiveTerm, parseTerm, isValidTerm, type Term } from "@/lib/terms";

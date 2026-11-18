@@ -189,13 +189,43 @@ try {
         Write-FacultyLog -Message "LAN access disabled; application will bind to localhost only." -LogPath $setupLog
     }
 
+    $wsh = New-Object -ComObject WScript.Shell
+    $managerBat = Join-Path $root "scripts\windows\FacultyAttendanceManager.bat"
+
+    # Start Menu Shortcuts
+    $commonStartMenu = [Environment]::GetFolderPath("CommonStartMenu")
+    if ($commonStartMenu) {
+        $programsDir = Join-Path $commonStartMenu "Programs\Faculty Attendance and Time Log System"
+        New-Item -ItemType Directory -Force -Path $programsDir | Out-Null
+
+        $webShortcut = Join-Path $programsDir "Faculty Attendance.url"
+        $urlContent = "[InternetShortcut]`r`nURL=http://localhost:$appPort/`r`n"
+        [System.IO.File]::WriteAllText($webShortcut, $urlContent)
+
+        if (Test-Path -LiteralPath $managerBat) {
+            $mgrShortcut = $wsh.CreateShortcut((Join-Path $programsDir "Faculty Attendance Manager.lnk"))
+            $mgrShortcut.TargetPath = $managerBat
+            $mgrShortcut.WorkingDirectory = (Split-Path -Parent $managerBat)
+            $mgrShortcut.Description = "Faculty Attendance and Time Log System Control Panel"
+            $mgrShortcut.Save()
+        }
+    }
+
+    # Desktop Shortcuts
     if ($desktopShortcut) {
         $desktop = [Environment]::GetFolderPath("CommonDesktopDirectory")
         if ($desktop) {
             $shortcutPath = Join-Path $desktop "Faculty Attendance.url"
-            $url = "http://localhost:$appPort/"
-            $content = "[InternetShortcut]`r`nURL=$url`r`n"
-            [System.IO.File]::WriteAllText($shortcutPath, $content)
+            $urlContent = "[InternetShortcut]`r`nURL=http://localhost:$appPort/`r`n"
+            [System.IO.File]::WriteAllText($shortcutPath, $urlContent)
+
+            if (Test-Path -LiteralPath $managerBat) {
+                $mgrDesk = $wsh.CreateShortcut((Join-Path $desktop "Faculty Attendance Control Panel.lnk"))
+                $mgrDesk.TargetPath = $managerBat
+                $mgrDesk.WorkingDirectory = (Split-Path -Parent $managerBat)
+                $mgrDesk.Description = "Faculty Attendance and Time Log System Control Panel"
+                $mgrDesk.Save()
+            }
         }
     }
 
