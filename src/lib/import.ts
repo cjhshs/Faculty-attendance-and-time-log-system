@@ -3,7 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { normaliseFacultyName, surnameOf, nameKey, parseScheduleCell } from "@/lib/schedule-parser";
 import {
   facultyNameKey,
+  facultyNameMatches,
   nameSimilarity,
+  normalizeFacultyName,
   resolveFacultyDepartmentFromRoster,
   type RosterFaculty,
 } from "@/lib/faculty-department";
@@ -14,7 +16,14 @@ import {
   unresolvedAmbiguousReviews,
 } from "@/lib/faculty-membership";
 import { normalizeSemester } from "@/lib/terms";
-import { timeToMinutes, WEEKDAY_NAMES } from "@/lib/dates";
+import {
+  eachDate,
+  formatISODate,
+  hoursOfRange,
+  timeToMinutes,
+  WEEKDAY_NAMES,
+} from "@/lib/dates";
+import type { Prisma } from "@prisma/client";
 import { programNameFor } from "@/lib/program-names";
 import {
   COLLEGE_DEFS,
@@ -550,8 +559,18 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const roomById = new Map(ctx.rooms.map((r) => [r.id, r]));
   // Roster matching ignores capitalization, repeated spaces and comma spacing,
   // but never reorders name tokens or drops middle initials. Two genuinely
-  // different people therefore cannot collapse into one match.
-  const facultyByKey = new Map(ctx.faculty.map((f) => [facultyNameKey(f.fullName), f]));
+  // different people therefore cannot collapse into one match. Both the safe
+  // key and the fully normalized name are indexed so this plan-time lookup
+  // agrees exactly with the commit-time `resolveInstructorLink` predicate.
+  const facultyByKey = new Map<string, (typeof ctx.faculty)[number]>();
+  for (const f of ctx.faculty) {
+    facultyByKey.set(facultyNameKey(f.fullName), f);
+    facultyByKey.set(normalizeFacultyName(f.fullName), f);
+  }
+  const lookupFaculty = (name: string | null | undefined) =>
+    facultyByKey.get(facultyNameKey(name)) ??
+    facultyByKey.get(normalizeFacultyName(name)) ??
+    null;
   const existingByKey = new Map(
     ctx.existingSlots.map((s) => {
       const roomCode = roomById.get(s.roomId)?.code ?? "";
@@ -685,7 +704,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
       usage.rows.add(rowNumber);
       usage.programs.add(normalizeCourseCode(courseCode));
       instructorUsage.set(key, usage);
-      if (!facultyByKey.has(key)) {
+      if (!lookupFaculty(instructorRaw)) {
         newFacultyNames.add(instructorRaw);
         for (const f of ctx.faculty) {
           const score = similarity(instructorRaw, f.fullName);
@@ -732,7 +751,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
         let status: PlannedSlotStatus = "new";
         if (existing) {
           const sameFaculty =
-            (existing.facultyId ? facultyByKey.get(facultyNameKey(instructorRaw))?.id : null) === existing.facultyId;
+            (existing.facultyId ? lookupFaculty(instructorRaw)?.id ?? null : null) === existing.facultyId;
           const unchanged =
             existing.subject === subject && (existing.description ?? "") === cell(row["Description"]) && sameFaculty;
           status = unchanged ? "unchanged" : "update";
@@ -784,7 +803,7 @@ export function planFromRows(rows: Record<string, unknown>[], ctx: PlanContext):
   const facultyReview: FacultyReviewEntry[] = [];
   for (const usage of instructorUsage.values()) {
     const usageKey = facultyNameKey(usage.name);
-    const exact = roster.filter((f) => facultyNameKey(f.fullName) === usageKey);
+    const exact = roster.filter((f) => facultyNameMatches(usage.name, f.fullName));
     const candidates: FacultyReviewCandidate[] = exact.map((f) => ({
       facultyId: f.id,
       fullName: f.fullName,
@@ -1111,6 +1130,10 @@ export type CommitResult = {
   // because no explicit administrator choice was supplied.
   ambiguousUnlinked: number;
   batchId: number | null;
+  // Calendar range work. Rows are only ever created as unencoded (present=NULL),
+  // and existing rows are skipped, so manually encoded attendance is untouched.
+  attendanceRowsCreated: number;
+  attendanceDates: number;
 };
 
 export type ImportBatchMeta = {
@@ -1122,6 +1145,9 @@ export type ImportBatchMeta = {
   facultyAssignments?: Record<string, number>;
   // When true, existing slots may be updated but new slots are never created.
   reprocessOnly?: boolean;
+  // Resolved calendar range for this import. Set only when the semester dates
+  // are known; the batch stores it and attendance rows are generated within it.
+  attendanceRange?: { start: Date; end: Date } | null;
 };
 
 // Raised before anything is written when an instructor name matches more than
@@ -1196,6 +1222,8 @@ export async function writePlan(
     skippedNew: 0,
     ambiguousUnlinked: 0,
     batchId: null,
+    attendanceRowsCreated: 0,
+    attendanceDates: 0,
   };
 
   await prisma.$transaction(
@@ -1239,9 +1267,12 @@ export async function writePlan(
       // Only bother tracking a batch when a target term is known and the file
       // will actually create or update at least one slot. Unchanged/error rows
       // keep whatever batch they already belonged to.
-      const willWrite = slotsToWrite.some(
-        (s) => s.status === "new" || s.status === "update",
-      );
+      const willWrite =
+        slotsToWrite.some((s) => s.status === "new" || s.status === "update") ||
+        // A selected calendar range is itself an import event worth recording:
+        // it drives attendance generation and must be persisted even when the
+        // workbook's schedules are unchanged from a previous import.
+        !!meta?.attendanceRange;
       let batchId: number | null = null;
       if (target && willWrite) {
         const batch = await tx.importBatch.create({
@@ -1251,6 +1282,8 @@ export async function writePlan(
             semester: target.semester,
             checksum: meta?.checksum ?? null,
             importedById: meta?.importedById ?? null,
+            startDate: meta?.attendanceRange?.start ?? null,
+            endDate: meta?.attendanceRange?.end ?? null,
           },
         });
         batchId = batch.id;
@@ -1315,6 +1348,10 @@ export async function writePlan(
       // on an exact case-insensitive string, so formatting differences cannot
       // create a second roster row. A name matching several rows is left
       // unlinked unless an administrator explicitly chose one.
+      const cetCollege = await tx.college.findFirst({
+        where: { code: "CET" },
+        select: { id: true },
+      });
       const roster = await tx.faculty.findMany({
         select: {
           id: true,
@@ -1326,7 +1363,7 @@ export async function writePlan(
       const rosterRows = roster.map((row) => ({
         id: row.id,
         fullName: row.fullName,
-        departmentCode: row.department?.code ?? null,
+        departmentCode: row.department?.code ?? "CET",
       }));
       const facultyNamesByKey = new Map<string, string>();
       for (const slot of slotsToWrite) {
@@ -1344,11 +1381,15 @@ export async function writePlan(
           // still unknown, the existing slot keeps its current link below.
           if (meta?.reprocessOnly) continue;
           const created = await tx.faculty.create({
-            data: { fullName: name, surname: surnameOf(name) },
+            data: {
+              fullName: name,
+              surname: surnameOf(name),
+              departmentId: cetCollege?.id ?? null,
+            },
           });
           facultyMap.set(key, created.id);
           result.facultyCreated++;
-          rosterRows.push({ id: created.id, fullName: name, departmentCode: null });
+          rosterRows.push({ id: created.id, fullName: name, departmentCode: "CET" });
         } else {
           // Ambiguous duplicate name or an explicit choice that no longer
           // exists. Never guess: the slot keeps its class data but has no
@@ -1410,6 +1451,71 @@ export async function writePlan(
           const created = await tx.scheduleSlot.create({ data, select: { id: true } });
           existingByKey.set(key, { id: created.id, facultyId });
           result.created++;
+        }
+      }
+
+      // Pre-create unencoded attendance rows for the selected calendar range.
+      // This runs inside the same transaction as the slot writes, so a failed
+      // import never leaves a partial range behind. skipDuplicates makes a
+      // repeat import of the same file and range idempotent and guarantees an
+      // already encoded row is never overwritten.
+      if (meta?.attendanceRange && meta.importedById) {
+        const { start, end } = meta.attendanceRange;
+        const slotHours = new Map<number, { weekday: number; hours: string[]; courseId: number }>();
+        for (const slot of slotsToWrite) {
+          const key = scheduleSlotKey(slot.cn, slot.weekday, slot.start, slot.end, slot.roomCode);
+          const slotId = existingByKey.get(key)?.id;
+          const courseId = courseMap.get(slot.courseCode);
+          if (!slotId || !courseId) continue;
+          slotHours.set(slotId, {
+            weekday: slot.weekday,
+            hours: hoursOfRange(slot.start, slot.end),
+            courseId,
+          });
+        }
+
+        if (slotHours.size > 0) {
+          const sessionByKey = new Map<string, number>();
+          const attendanceRows: Prisma.AttendanceCreateManyInput[] = [];
+          for (const date of eachDate(start, end)) {
+            const dateKey = formatISODate(date);
+            for (const [slotId, info] of slotHours) {
+              if (info.weekday !== date.getUTCDay()) continue;
+              const sessionKey = `${dateKey}|${info.courseId}`;
+              let sessionId = sessionByKey.get(sessionKey);
+              if (sessionId === undefined) {
+                const session = await tx.attendanceSession.upsert({
+                  where: { date_courseId: { date, courseId: info.courseId } },
+                  create: { date, courseId: info.courseId, status: "DRAFT" },
+                  update: {},
+                  select: { id: true },
+                });
+                sessionId = session.id;
+                sessionByKey.set(sessionKey, sessionId);
+              }
+              for (const hour of info.hours) {
+                attendanceRows.push({
+                  slotId,
+                  sessionId,
+                  date,
+                  hourStart: hour,
+                  present: null,
+                  encodedById: meta.importedById,
+                });
+              }
+            }
+          }
+
+          // Chunked so a full-semester import does not hit the database's
+          // parameter limit for a single INSERT.
+          for (let i = 0; i < attendanceRows.length; i += 500) {
+            const created = await tx.attendance.createMany({
+              data: attendanceRows.slice(i, i + 500),
+              skipDuplicates: true,
+            });
+            result.attendanceRowsCreated += created.count;
+          }
+          result.attendanceDates = eachDate(start, end).length;
         }
       }
 

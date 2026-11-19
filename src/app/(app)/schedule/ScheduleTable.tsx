@@ -1,7 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState } from "react";
-import { createPortal } from "react-dom";
+import { Modal } from "../Modal";
 import { deleteScheduleSlot, updateScheduleSlot, type ScheduleEditState } from "./actions";
 import { WEEKDAY_NAMES, formatTime12 } from "@/lib/dates";
 
@@ -36,6 +36,47 @@ const MODE_LABELS: Record<string, string> = {
 
 const initialState: ScheduleEditState = { ok: false, message: "" };
 
+type SortKey =
+  | "program"
+  | "cn"
+  | "subject"
+  | "section"
+  | "weekday"
+  | "start"
+  | "room"
+  | "mode"
+  | "faculty";
+type SortState = { key: SortKey; dir: "asc" | "desc" } | null;
+
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+function SortHeader({
+  label,
+  sortKey,
+  sort,
+  onSort,
+  className,
+}: {
+  label: string;
+  sortKey: SortKey;
+  sort: SortState;
+  onSort: (key: SortKey) => void;
+  className?: string;
+}) {
+  const active = sort?.key === sortKey;
+  return (
+    <th
+      scope="col"
+      className={className}
+      aria-sort={active ? (sort!.dir === "asc" ? "ascending" : "descending") : undefined}
+    >
+      <button type="button" onClick={() => onSort(sortKey)}>
+        {label}
+      </button>
+    </th>
+  );
+}
+
 export function ScheduleTable({
   rows,
   faculty,
@@ -54,6 +95,7 @@ export function ScheduleTable({
   const [editing, setEditing] = useState<ScheduleRowData | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<ScheduleRowData | null>(null);
+  const [sort, setSort] = useState<SortState>(null);
 
   useEffect(() => {
     if (!toast) return;
@@ -65,46 +107,94 @@ export function ScheduleTable({
   const roomById = new Map(rooms.map((r) => [r.id, r]));
   const facultyById = new Map(faculty.map((f) => [f.id, f.label]));
 
+  function toggleSort(key: SortKey) {
+    setSort((prev) =>
+      prev && prev.key === key
+        ? { key, dir: prev.dir === "asc" ? "desc" : "asc" }
+        : { key, dir: "asc" },
+    );
+  }
+
+  const sortedRows = (() => {
+    if (!sort) return rows;
+    const factor = sort.dir === "asc" ? 1 : -1;
+    const value = (s: ScheduleRowData): string | number => {
+      switch (sort.key) {
+        case "program":
+          return courseById.get(s.courseId) ?? "";
+        case "cn":
+          return s.cn;
+        case "subject":
+          return s.subject;
+        case "section":
+          return s.section ?? "";
+        case "weekday":
+          return s.weekday;
+        case "start":
+          return s.startTime;
+        case "room":
+          return roomById.get(s.roomId)?.code ?? "";
+        case "mode":
+          return MODE_LABELS[s.mode] ?? s.mode;
+        case "faculty":
+          return s.facultyId ? (facultyById.get(s.facultyId) ?? "") : "";
+      }
+    };
+    return [...rows].sort((a, b) => {
+      const av = value(a);
+      const bv = value(b);
+      if (typeof av === "number" && typeof bv === "number") return factor * (av - bv);
+      return factor * collator.compare(String(av), String(bv));
+    });
+  })();
+
   return (
     <>
-      <table className="data-table [&_td]:px-2 [&_th]:px-2">
+      <table className="data-table data-table--stack [&_td]:px-2 [&_th]:px-2">
+        <caption className="visually-hidden">Schedule of classes</caption>
         <thead>
           <tr>
-            <th scope="col">Program</th>
-            <th scope="col">CN</th>
-            <th scope="col">Subject</th>
-            <th scope="col">Section</th>
-            <th scope="col">Day</th>
-            <th scope="col">Time</th>
-            <th scope="col">Room</th>
-            <th scope="col">Mode</th>
-            <th scope="col">Faculty</th>
+            <SortHeader label="Program" sortKey="program" sort={sort} onSort={toggleSort} />
+            <SortHeader label="CN" sortKey="cn" sort={sort} onSort={toggleSort} />
+            <SortHeader label="Subject" sortKey="subject" sort={sort} onSort={toggleSort} />
+            <SortHeader label="Section" sortKey="section" sort={sort} onSort={toggleSort} />
+            <SortHeader label="Day" sortKey="weekday" sort={sort} onSort={toggleSort} />
+            <SortHeader label="Time" sortKey="start" sort={sort} onSort={toggleSort} />
+            <SortHeader label="Room" sortKey="room" sort={sort} onSort={toggleSort} />
+            <SortHeader label="Mode" sortKey="mode" sort={sort} onSort={toggleSort} />
+            <SortHeader label="Faculty" sortKey="faculty" sort={sort} onSort={toggleSort} />
             {canEdit ? <th scope="col" className="text-right">Actions</th> : null}
           </tr>
         </thead>
         <tbody>
-          {rows.map((s) => {
+          {sortedRows.map((s) => {
             const room = roomById.get(s.roomId);
             const isTba = !room || room.type === "TBA";
             return (
               <tr key={s.id}>
-                <td className="font-medium">{courseById.get(s.courseId) ?? "—"}</td>
-                <td className="font-mono text-xs">{s.cn}</td>
-                <td>{s.subject}</td>
-                <td>{s.section ?? "—"}</td>
-                <td>{WEEKDAY_NAMES[s.weekday]}</td>
-                <td className="whitespace-nowrap">
+                <td className="font-medium" data-label="Program">
+                  {courseById.get(s.courseId) ?? "—"}
+                </td>
+                <td className="font-mono text-xs" data-label="CN">
+                  {s.cn}
+                </td>
+                <td data-label="Subject">{s.subject}</td>
+                <td data-label="Section">{s.section ?? "—"}</td>
+                <td data-label="Day">{WEEKDAY_NAMES[s.weekday]}</td>
+                <td className="whitespace-nowrap" data-label="Time">
                   {formatTime12(s.startTime)}–{formatTime12(s.endTime)}
                 </td>
-                <td>
+                <td data-label="Room">
                   {isTba ? (
-                    <span className="badge bg-amber-100 text-amber-800">TBA</span>
+                    <span className="badge badge-warn">TBA</span>
                   ) : (
                     <span className="whitespace-nowrap">{room!.code}</span>
                   )}
                 </td>
-                <td className="whitespace-nowrap">{MODE_LABELS[s.mode] ?? s.mode}</td>
-                <td>
+                <td className="whitespace-nowrap" data-label="Mode">
+                  {MODE_LABELS[s.mode] ?? s.mode}
+                </td>
+                <td data-label="Faculty">
                   {s.facultyId ? (
                     facultyById.get(s.facultyId) ?? "—"
                   ) : (
@@ -112,7 +202,7 @@ export function ScheduleTable({
                   )}
                 </td>
                 {canEdit ? (
-                  <td className="text-right whitespace-nowrap">
+                  <td className="text-right whitespace-nowrap" data-label="Actions">
                     <button
                       type="button"
                       onClick={() => setEditing(s)}
@@ -178,7 +268,7 @@ export function ScheduleTable({
       ) : null}
 
       {toast ? (
-        <div className="no-print fixed bottom-5 right-5 z-[60] alert alert-success shadow-lg">
+        <div role="status" className="no-print fixed bottom-5 right-5 z-[60] alert alert-success shadow-lg">
           {toast}
         </div>
       ) : null}
@@ -202,27 +292,8 @@ function DeleteModal({
     if (state.ok && state.message) onDeleted(state.message);
   }, [state, onDeleted]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const content = (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4"
-      onClick={onClose}
-      role="presentation"
-    >
-      <div
-        className="w-full max-w-md rounded-xl border border-line bg-white p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="delete-slot-title"
-      >
+  return (
+    <Modal open onClose={onClose} labelledBy="delete-slot-title" className="max-w-md">
         <h2 id="delete-slot-title" className="section-title">
           Delete schedule
         </h2>
@@ -250,7 +321,7 @@ function DeleteModal({
 
         <form action={action} className="mt-5 flex justify-end gap-2">
           <input type="hidden" name="id" value={row.id} />
-          <button type="button" className="btn" onClick={onClose} disabled={pending}>
+          <button type="button" className="btn" onClick={onClose} disabled={pending} autoFocus>
             Cancel
           </button>
           <button
@@ -262,12 +333,8 @@ function DeleteModal({
             {pending ? "Deleting…" : "Delete schedule"}
           </button>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
-
-  if (typeof document === "undefined") return null;
-  return createPortal(content, document.body);
 }
 
 function EditModal({
@@ -292,27 +359,13 @@ function EditModal({
     if (state.ok && state.message) onSaved(state.message);
   }, [state, onSaved]);
 
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
-    }
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const content = (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/50 p-4"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      label={`Edit schedule ${row.cn}`}
+      className="w-[min(94vw,42rem)] max-w-none p-0"
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label={`Edit schedule ${row.cn}`}
-        className="my-8 w-full max-w-2xl rounded-xl border border-line bg-white shadow-xl"
-      >
         <div className="flex items-center justify-between border-b border-line px-5 py-3">
           <div>
             <h2 className="section-title">Edit schedule</h2>
@@ -351,7 +404,7 @@ function EditModal({
                 <label className="label req" htmlFor="e-course">
                   Program
                 </label>
-                <select id="e-course" name="courseId" className="select" defaultValue={row.courseId} required>
+                <select id="e-course" name="courseId" className="select" defaultValue={row.courseId} required autoFocus>
                   {courses.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.label}
@@ -555,10 +608,6 @@ function EditModal({
             </button>
           </div>
         </form>
-      </div>
-    </div>
+    </Modal>
   );
-
-  if (typeof document === "undefined") return null;
-  return createPortal(content, document.body);
 }

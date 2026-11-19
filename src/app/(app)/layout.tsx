@@ -21,8 +21,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     items.push({ href: "/schedule", label: "Schedule" });
   if (hasPermission(user, PERMISSIONS.FACULTY_VIEW))
     items.push({ href: "/master", label: "Master Data" });
-  if (hasPermission(user, PERMISSIONS.FACULTY_VIEW))
-    items.push({ href: "/departments", label: "Departments" });
+
   if (hasPermission(user, PERMISSIONS.CALENDAR_MANAGE))
     items.push({ href: "/calendar", label: "Calendar" });
   if (hasPermission(user, PERMISSIONS.SUMMARY_VIEW))
@@ -39,7 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="min-h-screen">
       <header className="no-print sticky top-0 z-40 border-b border-navy-deep bg-navy text-white shadow-sm">
-        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-3 py-2 sm:px-4 sm:py-3">
+        <div className="mx-auto flex max-w-7xl flex-col gap-2 px-3 py-2 sm:px-4 sm:py-2.5">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="flex min-w-0 items-center gap-2 sm:gap-3">
               <span className="flex items-center justify-center rounded-full bg-white p-1">
@@ -61,7 +60,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             </div>
             <div className="flex items-center gap-3 text-sm">
               <span className="max-w-[9rem] truncate text-slate-200 sm:max-w-none">
-                {user.name} <span className="text-slate-400">({user.roles.join(", ")})</span>
+                {user.name} <span className="text-slate-300">({user.roles.join(", ")})</span>
               </span>
               <form action={logoutAction}>
                 <button

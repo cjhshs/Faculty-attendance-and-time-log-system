@@ -142,6 +142,26 @@ export async function ensureCollegeCatalog(db: Db): Promise<CollegeCatalogStats>
     collegeIdByCode.set(college.code, college.id);
   }
 
+  // In CET-only system: safely clean up obsolete non-CET colleges and courses that have no slots
+  await db.course.deleteMany({
+    where: {
+      code: { notIn: PROGRAM_CATALOG.map((p) => p.code) },
+      slots: { none: {} },
+    },
+  });
+  await db.college.deleteMany({
+    where: { code: { not: "CET" } },
+  });
+
+  // Assign any remaining unassigned faculty to CET
+  const cetId = collegeIdByCode.get("CET");
+  if (cetId) {
+    await db.faculty.updateMany({
+      where: { departmentId: null },
+      data: { departmentId: cetId },
+    });
+  }
+
   let programsCreated = 0;
   for (const program of PROGRAM_CATALOG) {
     const name = program.name || programNameFor(program.code);

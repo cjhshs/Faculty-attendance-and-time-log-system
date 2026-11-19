@@ -33,6 +33,10 @@ export function LoginForm() {
           name="username"
           className="input"
           autoComplete="username"
+          autoCapitalize="none"
+          autoCorrect="off"
+          spellCheck={false}
+          enterKeyHint="next"
           autoFocus
           required
         />
@@ -49,6 +53,7 @@ export function LoginForm() {
             type={showPassword ? "text" : "password"}
             className="input pr-16"
             autoComplete="current-password"
+            enterKeyHint="go"
             required
           />
           <button
@@ -65,7 +70,7 @@ export function LoginForm() {
       <button type="submit" className="btn btn-primary h-10 w-full text-[15px]" disabled={pending}>
         {pending ? (
           <>
-            <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+            <progress className="loading-spinner" aria-label="Signing in" />
             Signing in…
           </>
         ) : (

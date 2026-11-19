@@ -3,8 +3,9 @@ import ExcelJS from "exceljs";
 import { getCurrentUser, hasPermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { buildSummary } from "@/lib/summary";
+import { resolveSummaryRange } from "@/lib/summary-range";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
-import { parseISODate, cutoffRange, formatLong } from "@/lib/dates";
+import { formatISODate, todayUtc } from "@/lib/dates";
 import { getActiveTerm, parseTerm, isValidTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
 
@@ -31,13 +32,12 @@ export async function GET(request: Request) {
   }
 
   const url = new URL(request.url);
-  const def = cutoffRange();
-  const start = parseISODate(url.searchParams.get("start")) ?? def.start;
-  const end = parseISODate(url.searchParams.get("end")) ?? def.end;
-  if (start > end) return NextResponse.json({ error: "Invalid date range." }, { status: 400 });
-  if ((end.getTime() - start.getTime()) / 86400000 > 366) {
-    return NextResponse.json({ error: "Date range is too large." }, { status: 400 });
+  const rangeResult = resolveSummaryRange(url.searchParams);
+  if (!rangeResult.ok) {
+    return NextResponse.json({ error: rangeResult.error }, { status: 400 });
   }
+  const range = rangeResult.range;
+  const { start, end } = range;
 
   const programCode = url.searchParams.get("program");
   const collegeCode = url.searchParams.get("college");
@@ -75,10 +75,10 @@ export async function GET(request: Request) {
       ? `Program: ${course.code}`
       : collegeName
         ? `College: ${collegeName}`
-        : "All colleges";
+        : "College of Engineering and Technology (CET)";
 
-  const yearParam = url.searchParams.get("schoolYear");
-  const semParam = url.searchParams.get("semester");
+  const yearParam = url.searchParams.get("schoolYear") ?? url.searchParams.get("year");
+  const semParam = url.searchParams.get("semester") ?? url.searchParams.get("sem");
   let selectedTerm;
   if (yearParam === "all" || semParam === "all") {
     selectedTerm = null;
@@ -97,8 +97,7 @@ export async function GET(request: Request) {
   const summary = await buildSummary(start, end, scopedCourseIds ?? undefined, selectedTerm, {
     departmentCode: departmentCode || null,
   });
-  const generated = new Date().toISOString().slice(0, 10);
-  const rangeLabel = `${formatLong(start)} to ${formatLong(end)}${selectedTerm ? ` (${selectedTerm.schoolYear} ${selectedTerm.semester})` : ""}`;
+  const generated = formatISODate(todayUtc());
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = "Faculty Attendance System";
@@ -117,10 +116,12 @@ export async function GET(request: Request) {
     { width: 13 },
   ];
   overall.mergeCells("A1:H1");
-  overall.getCell("A1").value = "ATTENDANCE SUMMARY";
+  overall.getCell("A1").value = range.header;
   overall.getCell("A1").font = { bold: true, size: 14 };
   overall.mergeCells("A2:H2");
-  overall.getCell("A2").value = `Range: ${rangeLabel}   |   Generated: ${generated}   |   ${scopeLabel}`;
+  overall.getCell("A2").value = `Generated: ${generated}   |   ${scopeLabel}${
+    selectedTerm ? `   |   ${selectedTerm.schoolYear} ${selectedTerm.semester}` : ""
+  }`;
   overall.mergeCells("A3:H3");
   overall.getCell("A3").value = `Faculty: ${summary.totals.facultyCount}   Encoded scheduled hrs: ${summary.totals.scheduledHours}   Present hrs: ${summary.totals.presentHours}   Absent hrs: ${summary.totals.absentHours}   Not encoded hrs: ${summary.totals.unencodedHours}`;
   if (summary.incomplete.length > 0) {
@@ -177,7 +178,7 @@ export async function GET(request: Request) {
     ws.getCell("A1").value = f.name;
     ws.getCell("A1").font = { bold: true, size: 13 };
     ws.mergeCells("A2:G2");
-    ws.getCell("A2").value = `Range: ${rangeLabel}   |   Generated: ${generated}`;
+    ws.getCell("A2").value = `${range.header}   |   Generated: ${generated}`;
 
     const head = ws.addRow([
       "Date",
@@ -233,15 +234,13 @@ export async function GET(request: Request) {
   await writeAudit(
     user.id,
     "summary.export",
-    `Exported summary ${start.toISOString().slice(0, 10)}..${end.toISOString().slice(0, 10)} (${scopeLabel})`,
+    `Exported summary ${formatISODate(start)}..${formatISODate(end)} (${scopeLabel})`,
   );
 
   return new NextResponse(Buffer.from(arrayBuffer), {
     headers: {
       "Content-Type": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-      "Content-Disposition": `attachment; filename="attendance-summary-${start
-        .toISOString()
-        .slice(0, 10)}_${end.toISOString().slice(0, 10)}.xlsx"`,
+      "Content-Disposition": `attachment; filename="attendance-summary-${formatISODate(start)}_${formatISODate(end)}.xlsx"`,
     },
   });
 }

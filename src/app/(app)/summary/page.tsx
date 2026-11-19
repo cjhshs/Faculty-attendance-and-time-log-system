@@ -5,18 +5,21 @@ import { getCourses } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { buildSummary } from "@/lib/summary";
-import { cutoffRange, parseISODate, todayUtc, formatLong } from "@/lib/dates";
+import { resolveSummaryRange } from "@/lib/summary-range";
+import { formatISODate, todayUtc } from "@/lib/dates";
 import { getActiveTerm, listTerms, parseTerm, isValidTerm } from "@/lib/terms";
 import { getAcademicPeriod, periodRangeWarning } from "@/lib/academic-period";
-import { formatISODate } from "@/lib/dates";
 import { ScrollArea } from "../ScrollArea";
 import { CollegeCourseFilter } from "../CollegeCourseFilter";
 import { PersistForm } from "../PersistForm";
+import { SummaryRangePicker } from "../SummaryRangePicker";
 
 export default async function SummaryPage({
   searchParams,
 }: {
   searchParams: Promise<{
+    rangeMode?: string;
+    month?: string;
     start?: string;
     end?: string;
     program?: string;
@@ -25,16 +28,19 @@ export default async function SummaryPage({
     q?: string;
     year?: string;
     sem?: string;
+    schoolYear?: string;
+    semester?: string;
     faculty?: string;
   }>;
 }) {
   const user = await requirePermission(PERMISSIONS.SUMMARY_VIEW);
   const params = await searchParams;
-  const def = cutoffRange();
   const [activeTerm, terms] = await Promise.all([getActiveTerm(), listTerms()]);
   const years = Array.from(new Set(terms.map((t) => t.schoolYear)));
-  const selectedYear = params.year ?? activeTerm.schoolYear;
-  const selectedSem = params.sem ?? activeTerm.semester;
+  // The form submits year/sem, while summary links use schoolYear/semester.
+  // Accept both so a term selection survives faculty, print and export links.
+  const selectedYear = params.year ?? params.schoolYear ?? activeTerm.schoolYear;
+  const selectedSem = params.sem ?? params.semester ?? activeTerm.semester;
   const selectedTerm =
     selectedYear === "all" || selectedSem === "all"
       ? null
@@ -48,18 +54,15 @@ export default async function SummaryPage({
     );
   }
 
-  const start = parseISODate(params.start ?? null) ?? def.start;
-  const end = parseISODate(params.end ?? null) ?? def.end;
-  if (start > end) {
-    return (
-      <div className="alert alert-error">
-        The start date must not be later than the end date.
-      </div>
-    );
+  const rangeResult = resolveSummaryRange(params);
+  if (!rangeResult.ok) {
+    return <div className="alert alert-error">{rangeResult.error}</div>;
   }
+  const range = rangeResult.range;
+  const { start, end } = range;
 
   const q = (params.q ?? "").trim().toLowerCase();
-  const department = (params.department ?? "").trim();
+  const department = (params.department ?? "CET").trim() || "CET";
   const [courses, collegeOptions, unassignedFaculty] = await Promise.all([
     getCourses(),
     getCollegeOptions(),
@@ -122,8 +125,10 @@ export default async function SummaryPage({
     : summary.faculty;
 
   const qs = new URLSearchParams({
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
+    rangeMode: range.mode,
+    month: range.month,
+    start: formatISODate(range.start),
+    end: formatISODate(range.end),
     ...(course ? { program: course.code } : {}),
     ...(scope.college ? { college: scope.college } : {}),
     ...(department ? { department } : {}),
@@ -157,6 +162,7 @@ export default async function SummaryPage({
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="page-title">Attendance Summary</h1>
+          <p className="page-subtitle">{range.header}</p>
           {selectedFaculty ? (
             <p className="page-subtitle">
               Individual summary · {selectedFaculty.name}
@@ -220,18 +226,12 @@ export default async function SummaryPage({
       ) : null}
 
       <PersistForm storageKey="fa:filter:summary" className="card flex flex-wrap items-end gap-4">
-        <div>
-          <label className="label" htmlFor="start">
-            Start date
-          </label>
-          <input id="start" type="date" name="start" defaultValue={start.toISOString().slice(0, 10)} className="input" />
-        </div>
-        <div>
-          <label className="label" htmlFor="end">
-            End date
-          </label>
-          <input id="end" type="date" name="end" defaultValue={end.toISOString().slice(0, 10)} className="input" />
-        </div>
+        <SummaryRangePicker
+          mode={range.mode}
+          month={range.month}
+          start={formatISODate(range.start)}
+          end={formatISODate(range.end)}
+        />
         <div>
           <label className="label" htmlFor="year">
             Academic year
@@ -263,27 +263,7 @@ export default async function SummaryPage({
           program={scope.program ?? ""}
           idPrefix="summary"
         />
-        <div>
-          <label className="label" htmlFor="summary-department">
-            Faculty department
-          </label>
-          <select
-            id="summary-department"
-            name="department"
-            defaultValue={department}
-            className="input"
-          >
-            <option value="">All departments</option>
-            {collegeOptions.colleges.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.code} — {c.name}
-              </option>
-            ))}
-            {collegeOptions.unassigned.length > 0 || unassignedFaculty > 0 ? (
-              <option value="unassigned">No department yet ({unassignedFaculty})</option>
-            ) : null}
-          </select>
-        </div>
+        <input type="hidden" name="department" value="CET" />
         <div className="min-w-56 flex-1">
           <label className="label" htmlFor="q">
             Find faculty
@@ -297,18 +277,14 @@ export default async function SummaryPage({
             className="input"
           />
         </div>
-        <button className="btn btn-primary" type="submit">
-          View
-        </button>
       </PersistForm>
 
       <p className="text-sm text-muted">
-        Range: <strong>{formatLong(start)}</strong> to <strong>{formatLong(end)}</strong> —{" "}
-        <strong>{scopeLabel}</strong>.{" "}
+        <strong>{range.header}</strong> — <strong>{scopeLabel}</strong>.{" "}
         {selectedTerm
           ? `Term: ${selectedTerm.schoolYear} · ${selectedTerm.semester}.`
           : "All semesters."}{" "}
-        Generated {todayUtc().toISOString().slice(0, 10)}.
+        Generated {formatISODate(todayUtc())}.
       </p>
       {summary.incomplete.length > 0 ? (
         <div className="alert alert-warn block">
@@ -372,6 +348,7 @@ export default async function SummaryPage({
             </div>
             <div className="overflow-x-auto">
               <table className="data-table">
+                <caption className="visually-hidden">Daily breakdown</caption>
                 <thead>
                   <tr>
                     <th scope="col">Date</th>
@@ -394,9 +371,9 @@ export default async function SummaryPage({
                       <td className="text-center text-zinc-600">{row.unencodedHours}</td>
                       <td>
                         {row.encoded ? (
-                          <span className="badge bg-green-100 text-green-800">Encoded</span>
+                          <span className="badge badge-success">Encoded</span>
                         ) : (
-                          <span className="badge bg-amber-100 text-amber-800">
+                          <span className="badge badge-warn">
                             Not fully encoded
                           </span>
                         )}
@@ -406,7 +383,7 @@ export default async function SummaryPage({
                   {selectedFaculty.daily.length === 0 ? (
                     <tr>
                       <td colSpan={7} className="text-center text-muted">
-                        No scheduled class for this faculty member in the selected range.
+                        No attendance records exist for this faculty member in the selected range.
                       </td>
                     </tr>
                   ) : null}
@@ -429,8 +406,9 @@ export default async function SummaryPage({
           ) : null}
         </div>
       ) : (
-        <ScrollArea className="card">
+        <ScrollArea className="card" label="Attendance summary">
           <table className="data-table">
+            <caption className="visually-hidden">Faculty attendance summary</caption>
             <thead>
               <tr>
                 <th scope="col">Faculty</th>
@@ -501,7 +479,7 @@ export default async function SummaryPage({
                         ? department === "unassigned"
                           ? "Every registered faculty member already has a department, so there is nobody in this scope."
                           : `No registered faculty belong to ${department} yet. Assign departments on Master Data before summarizing it.`
-                        : "No scheduled faculty in this range."}
+                        : "No attendance records exist within the selected range."}
                   </td>
                 </tr>
               ) : null}

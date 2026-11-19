@@ -2,6 +2,7 @@
 
 import { Fragment, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirm } from "../confirm";
 import { buildProgramSheet, paginateColumns, type SheetSlot } from "@/lib/attendance-sheet";
 import { formatISODate, formatLong } from "@/lib/dates";
 import logo1 from "@/app/logo/logo1.png";
@@ -143,6 +144,7 @@ function ProgramSheetPage({
 }) {
   const router = useRouter();
   const [removingId, setRemovingId] = useState<number | null>(null);
+  const { confirm, alert, dialog } = useConfirm();
 
   async function handleRemove(facultyId: number, label: string, isCustom: boolean) {
     if (onRemoveFaculty) {
@@ -151,10 +153,15 @@ function ProgramSheetPage({
     }
     if (!sheetKey) return;
 
-    const actionText = isCustom
-      ? `Remove ${label} from this attendance sheet?\n\nThis will remove them from this sheet. Master records and reusable custom selection are preserved.`
-      : `Remove/exclude ${label} from this attendance sheet?\n\nThis will exclude them from this daily sheet. Master faculty records, schedules, and historical attendance remain intact.`;
-    if (!window.confirm(actionText)) return;
+    const ok = await confirm({
+      title: isCustom ? `Remove ${label}?` : `Remove ${label} from this sheet?`,
+      message: isCustom
+        ? "This will remove them from this sheet. Master records and reusable custom selection are preserved."
+        : "This will exclude them from this daily sheet. Master faculty records, schedules, and historical attendance remain intact.",
+      confirmLabel: "Remove",
+      tone: "danger",
+    });
+    if (!ok) return;
 
     setRemovingId(facultyId);
     try {
@@ -170,12 +177,20 @@ function ProgramSheetPage({
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        alert(data.error ?? "Failed to remove faculty member.");
+        await alert({
+          title: "Could not remove faculty member",
+          message: data.error ?? "Failed to remove faculty member.",
+          tone: "danger",
+        });
         return;
       }
       router.refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to remove faculty member.");
+      await alert({
+        title: "Could not remove faculty member",
+        message: err instanceof Error ? err.message : "Failed to remove faculty member.",
+        tone: "danger",
+      });
     } finally {
       setRemovingId(null);
     }
@@ -183,6 +198,7 @@ function ProgramSheetPage({
 
   return (
     <section className="print-sheet mb-8 bg-white p-3 shadow-sm">
+      {dialog}
       <SheetHead date={date} header={header} course={course} />
 
       {sheet.unassigned.length > 0 && showUnassigned ? (
@@ -195,13 +211,14 @@ function ProgramSheetPage({
       <table className="w-full border-collapse text-[11px] leading-tight">
         <thead>
           <tr>
-            <th rowSpan={2} className="border border-black px-1 py-0.5 text-center">
+            <th rowSpan={2} scope="col" className="border border-black px-1 py-0.5 text-center">
               TIME
             </th>
             {pageColumns.map((col) => (
               <th
                 key={col.facultyId}
                 colSpan={2}
+                scope="colgroup"
                 className="border border-black px-1 py-0.5 text-center font-bold"
               >
                 <div className="flex items-center justify-center gap-1">
@@ -217,7 +234,7 @@ function ProgramSheetPage({
                       title={`Remove ${col.label} from this sheet`}
                       onClick={() => handleRemove(col.facultyId, col.label, Boolean(col.isCustom))}
                       disabled={removingId === col.facultyId}
-                      className="no-print ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-slate-400 hover:bg-red-50 hover:text-red-600 focus:outline-none transition-colors cursor-pointer text-xs leading-none"
+                      className="no-print ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors cursor-pointer text-xs leading-none"
                     >
                       {removingId === col.facultyId ? "…" : "\u2212"}
                     </button>
@@ -229,8 +246,10 @@ function ProgramSheetPage({
           <tr>
             {pageColumns.map((col) => (
               <Fragment key={col.facultyId}>
-                <th className="border border-black px-1 py-0.5 text-center text-[10px]">ROOM</th>
-                <th className="border border-black px-1 py-0.5 text-center text-[10px]">
+                <th scope="col" className="border border-black px-1 py-0.5 text-center text-[10px]">
+                  ROOM
+                </th>
+                <th scope="col" className="border border-black px-1 py-0.5 text-center text-[10px]">
                   &#10003;
                 </th>
               </Fragment>

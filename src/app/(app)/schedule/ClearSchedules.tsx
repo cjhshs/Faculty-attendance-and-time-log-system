@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState, useTransition } from "react";
+import { useState, useTransition } from "react";
+import { Modal } from "../Modal";
 import {
   clearImportedSchedules,
   previewClearSchedules,
@@ -278,54 +279,38 @@ function ConfirmModal({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel]);
-
-  if (typeof document === "undefined") return null;
-
   return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4"
-      onClick={onCancel}
-      role="presentation"
+    <Modal
+      open
+      onClose={onCancel}
+      label="Confirm clearing schedules"
+      dismissible={!pending}
+      className="max-w-md"
     >
-      <div
-        className="w-full max-w-md rounded-xl border border-line bg-white p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label="Confirm clearing schedules"
-      >
-        <h2 className="section-title">Clear imported schedules</h2>
-        <p className="mt-2 text-sm">
-          You are about to permanently delete <strong>{preview.clearable}</strong> schedule(s) from{" "}
-          <strong>{preview.scopeLabel}</strong>.
-        </p>
-        <ul className="mt-3 list-inside list-disc text-sm text-muted">
-          <li>Attendance history is never deleted.</li>
-          <li>
-            {preview.retained > 0
-              ? `${preview.retained} schedule(s) with attendance will be retained.`
-              : "No schedule in this scope has attendance history."}
-          </li>
-          <li>Other semesters, faculty, programs and rooms are not affected.</li>
-        </ul>
-        <p className="mt-3 alert alert-error block">This action cannot be undone.</p>
-        <div className="mt-5 flex justify-end gap-2">
-          <button type="button" className="btn" onClick={onCancel} disabled={pending}>
-            Cancel
-          </button>
-          <button type="button" className="btn btn-danger" onClick={onConfirm} disabled={pending}>
-            {pending ? "Clearing…" : `Yes, clear ${preview.clearable} schedule(s)`}
-          </button>
-        </div>
+      <h2 className="section-title">Clear imported schedules</h2>
+      <p className="mt-2 text-sm">
+        You are about to permanently delete <strong>{preview.clearable}</strong> schedule(s) from{" "}
+        <strong>{preview.scopeLabel}</strong>.
+      </p>
+      <ul className="mt-3 list-inside list-disc text-sm text-muted">
+        <li>Attendance history is never deleted.</li>
+        <li>
+          {preview.retained > 0
+            ? `${preview.retained} schedule(s) with attendance will be retained.`
+            : "No schedule in this scope has attendance history."}
+        </li>
+        <li>Other semesters, faculty, programs and rooms are not affected.</li>
+      </ul>
+      <p className="mt-3 alert alert-error block">This action cannot be undone.</p>
+      <div className="mt-5 flex justify-end gap-2">
+        <button type="button" className="btn" onClick={onCancel} disabled={pending} autoFocus>
+          Cancel
+        </button>
+        <button type="button" className="btn btn-danger" onClick={onConfirm} disabled={pending}>
+          {pending ? "Clearing…" : `Yes, clear ${preview.clearable} schedule(s)`}
+        </button>
       </div>
-    </div>
+    </Modal>
   );
 }
 

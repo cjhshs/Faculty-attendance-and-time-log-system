@@ -34,6 +34,39 @@ export function CustomFacultySearch({
   );
   const [, startTransition] = useTransition();
   const containerRef = useRef<HTMLDivElement>(null);
+  const listboxId = "custom-faculty-listbox";
+  const [activeIndex, setActiveIndex] = useState(-1);
+
+  const isDisabled = (item: FacultySearchResult) =>
+    item.isAlreadyOnSheet || currentFacultyIds.includes(item.id);
+
+  // Move the active option to the next/previous selectable row, wrapping around.
+  function moveActive(delta: 1 | -1) {
+    if (results.length === 0) return;
+    const selectable = results
+      .map((item, index) => ({ item, index }))
+      .filter(({ item }) => !isDisabled(item))
+      .map(({ index }) => index);
+    if (selectable.length === 0) return;
+    const current = selectable.indexOf(activeIndex);
+    const next =
+      current === -1
+        ? delta === 1
+          ? selectable[0]
+          : selectable[selectable.length - 1]
+        : selectable[(current + delta + selectable.length) % selectable.length];
+    setActiveIndex(next);
+    document.getElementById(`${listboxId}-option-${next}`)?.scrollIntoView({ block: "nearest" });
+  }
+
+  function choose(index: number) {
+    const item = results[index];
+    if (!item || isDisabled(item)) return;
+    setSelectedFaculty(item);
+    setIsOpen(false);
+    setActiveIndex(-1);
+    setFeedback(null);
+  }
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -79,6 +112,11 @@ export function CustomFacultySearch({
       clearTimeout(timer);
     };
   }, [query, date, schoolYear, semester, currentFacultyIds]);
+
+  // Reset the active option whenever the list or dropdown changes.
+  useEffect(() => {
+    setActiveIndex(-1);
+  }, [results, isOpen]);
 
   async function handleAdd() {
     if (!selectedFaculty) return;
@@ -142,6 +180,14 @@ export function CustomFacultySearch({
             className="input w-52 sm:w-60 text-xs py-1.5 pl-2.5 pr-7"
             placeholder="search name of faculty"
             value={selectedFaculty ? selectedFaculty.fullName : query}
+            role="combobox"
+            aria-expanded={isOpen}
+            aria-controls={listboxId}
+            aria-autocomplete="list"
+            aria-activedescendant={
+              isOpen && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined
+            }
+            aria-label="Search faculty to add to this sheet"
             onChange={(e) => {
               setSelectedFaculty(null);
               setQuery(e.target.value);
@@ -149,7 +195,31 @@ export function CustomFacultySearch({
               setFeedback(null);
             }}
             onFocus={() => setIsOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                if (!isOpen) setIsOpen(true);
+                else moveActive(1);
+              } else if (e.key === "ArrowUp") {
+                e.preventDefault();
+                moveActive(-1);
+              } else if (e.key === "Enter") {
+                if (isOpen && activeIndex >= 0) {
+                  e.preventDefault();
+                  choose(activeIndex);
+                }
+              } else if (e.key === "Escape") {
+                if (isOpen) {
+                  e.preventDefault();
+                  setIsOpen(false);
+                }
+              }
+            }}
             autoComplete="off"
+            autoCapitalize="off"
+            autoCorrect="off"
+            spellCheck={false}
+            enterKeyHint="search"
           />
           {selectedFaculty ? (
             <button
@@ -165,36 +235,46 @@ export function CustomFacultySearch({
               &times;
             </button>
           ) : loading ? (
-            <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted animate-spin">
-              &#9696;
-            </span>
+            <progress
+              className="loading-spinner absolute right-2 top-1/2 -translate-y-1/2 text-muted"
+              aria-label="Searching faculty"
+            />
           ) : null}
 
           {/* Autocomplete Dropdown */}
           {isOpen && (
-            <div className="absolute left-0 z-50 mt-1 max-h-60 w-80 overflow-y-auto rounded-md border border-line bg-white p-1 shadow-lg text-xs">
+            <div
+              id={listboxId}
+              role="listbox"
+              aria-label="Faculty search results"
+              className="absolute left-0 z-50 mt-1 max-h-60 w-80 overflow-y-auto rounded-md border border-line bg-white p-1 shadow-lg text-xs"
+            >
               {results.length === 0 ? (
                 <div className="px-3 py-2 text-muted text-center">
                   {loading ? "Searching faculty records..." : "No matching faculty found"}
                 </div>
               ) : (
-                results.map((item) => {
-                  const isCurrent =
-                    item.isAlreadyOnSheet || currentFacultyIds.includes(item.id);
+                results.map((item, index) => {
+                  const current = isDisabled(item);
                   return (
                     <button
                       key={item.id}
+                      id={`${listboxId}-option-${index}`}
                       type="button"
-                      disabled={isCurrent}
-                      onClick={() => {
-                        setSelectedFaculty(item);
-                        setIsOpen(false);
-                        setFeedback(null);
+                      role="option"
+                      aria-selected={activeIndex === index}
+                      aria-disabled={current}
+                      disabled={current}
+                      onClick={() => choose(index)}
+                      onMouseEnter={() => {
+                        if (!current) setActiveIndex(index);
                       }}
                       className={`w-full text-left rounded px-2.5 py-1.5 transition-colors flex items-center justify-between gap-2 ${
-                        isCurrent
+                        current
                           ? "bg-slate-50 text-muted opacity-70 cursor-not-allowed"
-                          : "hover:bg-slate-100 text-ink cursor-pointer"
+                          : activeIndex === index
+                            ? "bg-slate-100 text-ink cursor-pointer"
+                            : "text-ink cursor-pointer"
                       }`}
                     >
                       <div className="min-w-0">
@@ -215,7 +295,7 @@ export function CustomFacultySearch({
                         </div>
                       </div>
                       <div>
-                        {isCurrent ? (
+                        {current ? (
                           <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] text-slate-600 shrink-0">
                             On sheet
                           </span>
@@ -261,6 +341,7 @@ export function CustomFacultySearch({
 
       {feedback ? (
         <div
+          role={feedback.type === "success" ? "status" : "alert"}
           className={`absolute left-0 top-full mt-1.5 z-40 rounded px-2.5 py-1 text-xs shadow-sm ${
             feedback.type === "success"
               ? "bg-emerald-50 border border-emerald-300 text-emerald-800"

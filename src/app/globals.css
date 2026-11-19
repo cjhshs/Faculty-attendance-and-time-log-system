@@ -1,15 +1,27 @@
 @import "tailwindcss";
 
 :root {
+  /* The system keeps a fixed light + navy identity (school colours).
+     Declaring color-scheme keeps UA-rendered surfaces (scrollbars, form
+     controls) consistent instead of following the OS dark preference. */
+  color-scheme: light;
   --page: #f4f6f9;
   --surface: #ffffff;
   --border: #dce3eb;
   --text: #202b3c;
-  --muted: #667085;
+  --muted: #5b6577;
   --navy: #142b4a;
   --navy-deep: #0b1f38;
   --navy-2: #234b73;
   --focus: #234b73;
+  /* Minimum hit target. 24px (WCAG 2.5.8) by default, 44px on touch (2.5.5). */
+  --target-size: 24px;
+}
+
+@media (pointer: coarse) {
+  :root {
+    --target-size: 44px;
+  }
 }
 
 @theme inline {
@@ -34,14 +46,155 @@ body {
   text-rendering: optimizeLegibility;
 }
 
+/* Leave room for the sticky header and floating action bars so anchored jumps
+   and focus moves never land under them (F20). */
+html {
+  scroll-padding-block-start: 4.5rem;
+  scroll-padding-block-end: 5rem;
+}
+
 * {
   box-sizing: border-box;
+}
+
+/* A single, high-contrast keyboard focus ring for every interactive control.
+   Solid outline at >=3:1 against the surface (WCAG 1.4.11 / 2.4.11). */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+/* The navy header needs a light ring so it stays visible on dark. */
+header :where(a, button):focus-visible {
+  outline-color: #ffffff;
+}
+
+/* Keep pointer/touch targets large enough (WCAG 2.5.5 / 2.5.8). */
+:where(
+    button,
+    select,
+    textarea,
+    input:not([type="checkbox"], [type="radio"]),
+    [role="button"],
+    nav a
+  ) {
+  min-block-size: var(--target-size);
+}
+
+/* Tidy line wrapping without extra layout cost on every element. */
+h1,
+h2,
+h3 {
+  text-wrap: balance;
+}
+p,
+li {
+  text-wrap: pretty;
+}
+
+/* Loading spinner (F13): a native indeterminate <progress> styled as a ring.
+   Semantic to assistive tech, animated on the compositor, and slowed under
+   prefers-reduced-motion. */
+@property --arc-start {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@property --arc-end {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+progress.loading-spinner:indeterminate::-webkit-progress-bar,
+progress.loading-spinner:indeterminate::-webkit-progress-value,
+progress.loading-spinner:indeterminate::-moz-progress-bar {
+  display: none;
+  background: none;
+}
+progress.loading-spinner:indeterminate {
+  --_from: calc(90deg + var(--arc-start, 0deg));
+  --_to: calc(90deg + var(--arc-end, 158deg));
+  --size: 1rem;
+  --thickness: 2px;
+  --spinner-color: currentColor;
+  --track-color: color-mix(in srgb, currentColor 25%, transparent);
+  --spinner-duration: 1s;
+  position: relative;
+  width: var(--size);
+  height: var(--size);
+  border-radius: 50%;
+  appearance: none;
+  background: conic-gradient(
+      from var(--_from),
+      var(--spinner-color) calc(var(--_to) - var(--_from)),
+      transparent 0
+    )
+    var(--track-color);
+  animation: progress-spin var(--spinner-duration) linear infinite;
+}
+@supports (background-clip: border-area) {
+  progress.loading-spinner:indeterminate {
+    background-clip: border-area;
+    border: var(--thickness) solid transparent;
+    background-origin: border-box;
+  }
+}
+@supports not (background-clip: border-area) {
+  progress.loading-spinner:indeterminate {
+    --clip-boundary: calc(100% - var(--thickness));
+    mask-image: radial-gradient(
+      farthest-side,
+      transparent var(--clip-boundary),
+      black var(--clip-boundary)
+    );
+    border: 0;
+  }
+}
+@media (forced-colors: active) {
+  progress.loading-spinner:indeterminate {
+    forced-color-adjust: none;
+    --spinner-color: CanvasText;
+    --track-color: Canvas;
+  }
+}
+@keyframes progress-spin {
+  to {
+    rotate: 1turn;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  progress.loading-spinner:indeterminate {
+    --spinner-duration: 6s;
+  }
+}
+
+/* Native dialogs: contain scroll and provide a consistent scrim. */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+dialog::backdrop {
+  background: rgb(11 31 56 / 0.55);
+  overscroll-behavior: contain;
+}
+
+/* Canonical screen-reader-only recipe (kept in the a11y tree). */
+.visually-hidden:where(:not(:focus-within, :active)) {
+  position: absolute !important;
+  clip-path: inset(50%) !important;
+  overflow: hidden !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  border: 0 !important;
+  white-space: nowrap !important;
 }
 
 @layer components {
   /* Typography -------------------------------------------------------- */
   .page-title {
-    @apply text-[22px] font-bold tracking-tight text-navy sm:text-[26px];
+    /* Fluid but bounded (max <= 2.5x min) so zoom still resizes text. */
+    font-size: clamp(1.375rem, 1.25rem + 0.55vw, 1.625rem);
+    @apply font-bold tracking-tight text-navy;
   }
   .page-subtitle {
     @apply mt-1 text-sm text-muted;
@@ -62,7 +215,7 @@ body {
 
   /* Buttons ----------------------------------------------------------- */
   .btn {
-    @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-line bg-white px-3.5 text-sm font-medium text-navy transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/40 focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50;
+    @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-line bg-white px-3.5 text-sm font-medium text-navy transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-50;
   }
   .btn-primary {
     @apply border-navy bg-navy text-white hover:bg-navy-deep;
@@ -76,12 +229,16 @@ body {
   .btn-sm {
     @apply h-8 px-2.5 text-[13px];
   }
+  /* Press feedback (compositor-only). */
+  .btn:active:not(:disabled) {
+    scale: 0.98;
+  }
 
   /* Form controls ----------------------------------------------------- */
   .input,
   .select,
   .textarea {
-    @apply w-full h-9 rounded-md border border-line bg-white px-3 text-sm text-ink placeholder:text-slate-400 transition-colors focus-visible:border-navy-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-navy-2/25 disabled:bg-slate-50 disabled:text-slate-400;
+    @apply w-full h-9 rounded-md border border-line bg-white px-3 text-sm text-ink placeholder:text-slate-500 transition-colors focus-visible:border-navy-2 disabled:bg-slate-50 disabled:text-slate-500;
   }
   .textarea {
     @apply h-auto py-2;
@@ -89,10 +246,21 @@ body {
   .select {
     @apply pr-8;
   }
+  /* Native constraint feedback, only after the user has interacted. */
+  .input:user-invalid,
+  .select:user-invalid,
+  .textarea:user-invalid {
+    @apply border-red-600;
+  }
 
   /* Surfaces ---------------------------------------------------------- */
   .card {
     @apply rounded-lg border border-line bg-white p-4 sm:p-5;
+  }
+
+  /* Native modal dialog panel. */
+  .modal {
+    @apply m-auto max-h-[85vh] w-[min(92vw,32rem)] max-w-none overflow-y-auto rounded-xl border border-line bg-white p-5 text-ink shadow-xl;
   }
   .alert {
     @apply flex items-start gap-2 rounded-lg border px-4 py-3 text-sm;
@@ -132,8 +300,117 @@ body {
   .data-table tbody tr:hover {
     @apply bg-slate-50/70;
   }
+  /* Sticky column headings while a long table scrolls. */
+  .data-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+  }
+
+  /* Sortable column headings (F17). The button fills the cell and supplies the
+     padding, so the <th> drops its own; the arrow is decorative (the empty
+     alternative text keeps it out of the accessibility tree). */
+  .data-table th:has(> button) {
+    padding: 0;
+  }
+  .data-table th > button {
+    display: flex;
+    inline-size: 100%;
+    min-block-size: 2rem;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.5rem 0.75rem;
+    font: inherit;
+    letter-spacing: inherit;
+    text-transform: inherit;
+    text-align: inherit;
+    color: inherit;
+    cursor: pointer;
+  }
+  .data-table th[aria-sort] > button {
+    color: var(--navy-2);
+  }
+  .data-table th[aria-sort] > button::after {
+    content: "\25B2" / "";
+    font-size: 0.65em;
+    line-height: 1;
+  }
+  .data-table th[aria-sort="descending"] > button::after {
+    content: "\25BC" / "";
+  }
+
+  /* A scroll region is a query container so tables can adapt to the space
+     they actually have, not the viewport (F5). */
+  .scroll-region {
+    container-type: inline-size;
+  }
+
+  /* Stacked "card" layout for opted-in wide tables on narrow containers. */
+  @container (max-width: 40rem) {
+    .data-table--stack,
+    .data-table--stack thead,
+    .data-table--stack tbody,
+    .data-table--stack tr,
+    .data-table--stack th,
+    .data-table--stack td {
+      display: block;
+    }
+    .data-table--stack thead {
+      display: none;
+    }
+    .data-table--stack tr {
+      margin-block-end: 0.75rem;
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      background: var(--surface);
+      padding: 0.25rem 0.75rem;
+    }
+    .data-table--stack td {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 1rem;
+      border: 0;
+      padding: 0.3rem 0;
+    }
+    .data-table--stack td::before {
+      content: attr(data-label);
+      flex: 0 0 auto;
+      font-size: 0.6875rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--muted);
+    }
+    .data-table--stack td[data-label=""]::before,
+    .data-table--stack td:not([data-label])::before {
+      content: none;
+    }
+    /* The "no rows" cell spans the table; keep it as a plain block. */
+    .data-table--stack td[colspan] {
+      display: block;
+      text-align: center;
+    }
+  }
+
+  /* Badges ------------------------------------------------------------ */
   .badge {
     @apply inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+  .badge-neutral {
+    @apply bg-slate-100 text-slate-700;
+  }
+  .badge-success {
+    @apply bg-green-100 text-green-800;
+  }
+  .badge-warn {
+    @apply bg-amber-100 text-amber-800;
+  }
+  .badge-danger {
+    @apply bg-red-100 text-red-800;
+  }
+  .badge-info {
+    @apply bg-sky-100 text-sky-800;
   }
 
   /* Encode grid helpers (kept from prior work) ------------------------ */
@@ -162,6 +439,25 @@ body {
     background: var(--navy);
     color: #fff;
     box-shadow: 1px 0 0 0 var(--border);
+  }
+}
+
+/* Collapsed navigation: a native popover anchored under the Menu button. */
+.nav-menu-button {
+  anchor-name: --nav-menu-button;
+}
+.nav-menu {
+  inline-size: min(80dvw, 20rem);
+  max-block-size: calc(100dvh - 6rem);
+  overflow: auto;
+}
+@supports (anchor-name: --nav-menu-button) {
+  .nav-menu {
+    position: fixed;
+    inset: auto;
+    inset-block-start: anchor(--nav-menu-button bottom);
+    inset-inline-end: 1rem;
+    margin-block-start: 0.5rem;
   }
 }
 
@@ -222,6 +518,10 @@ body {
   }
   .data-table tbody tr:hover {
     background: transparent;
+  }
+  /* Sticky positioning has no meaning on paper and can repeat rows. */
+  .data-table thead th {
+    position: static;
   }
   a[href]::after {
     content: "";

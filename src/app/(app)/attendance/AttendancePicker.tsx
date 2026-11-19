@@ -5,34 +5,28 @@ import { useEffect, useMemo, useState } from "react";
 export type PickerProgram = { code: string; name: string | null };
 export type PickerCollege = { code: string; name: string; programs: PickerProgram[] };
 
-// Department-first scope picker for attendance generation. Selecting a
-// department includes its registered faculty across every program they teach;
-// the student program no longer decides whose columns appear.
+// CET-exclusive attendance scope picker for attendance sheet generation.
+// Department switching is removed as the system is strictly CET-exclusive.
 export function AttendancePicker({
   colleges,
-  unassigned,
-  department,
   selectedCodes,
 }: {
   colleges: PickerCollege[];
-  unassigned: PickerProgram[];
-  department: string;
+  unassigned?: PickerProgram[];
+  department?: string;
   selectedCodes: string[];
 }) {
-  const [selectedDepartment, setSelectedDepartment] = useState(department);
   const [checked, setChecked] = useState<Set<string>>(() => new Set(selectedCodes));
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- sync with a new server-provided scope
-    setSelectedDepartment(department);
     setChecked(new Set(selectedCodes));
-  }, [department, selectedCodes]);
+  }, [selectedCodes]);
 
   useEffect(() => {
     function onRestore(event: Event) {
       const values = (event as CustomEvent<{ values?: Record<string, unknown> }>).detail?.values;
       if (!values) return;
-      if (typeof values.department === "string") setSelectedDepartment(values.department);
       if (Array.isArray(values.programs)) {
         setChecked(new Set((values.programs as unknown[]).map(String)));
       }
@@ -41,165 +35,97 @@ export function AttendancePicker({
     return () => window.removeEventListener("fa:draft-restored", onRestore);
   }, []);
 
-  const departmentPrograms = useMemo(() => {
-    if (!selectedDepartment || selectedDepartment === "unassigned") return [];
-    return colleges.find((c) => c.code === selectedDepartment)?.programs ?? [];
-  }, [colleges, selectedDepartment]);
+  const cetCollege = useMemo(
+    () => colleges.find((c) => c.code.toUpperCase() === "CET") ?? colleges[0] ?? null,
+    [colleges],
+  );
 
-  const totalPrograms =
-    colleges.reduce((n, c) => n + c.programs.length, 0) + unassigned.length;
+  const departmentPrograms = useMemo(() => {
+    if (cetCollege && cetCollege.programs.length > 0) return cetCollege.programs;
+    return colleges.flatMap((c) => c.programs);
+  }, [cetCollege, colleges]);
 
   return (
-    <div className="space-y-2">
-      <div>
-        <label className="label" htmlFor="print-department">
-          College / Department
-        </label>
-        <select
-          id="print-department"
-          name="department"
-          className="input"
-          value={selectedDepartment}
-          onChange={(e) => {
-            setSelectedDepartment(e.target.value);
-            setChecked(new Set());
-          }}
-        >
-          <option value="">All colleges / all programs</option>
-          {colleges.map((c) => (
-            <option key={c.code} value={c.code}>
-              {c.code} — {c.name}
-            </option>
-          ))}
-          {unassigned.length > 0 ? (
-            <option value="unassigned">Programs without a college</option>
-          ) : null}
-        </select>
-      </div>
-
+    <div className="space-y-3">
+      <input type="hidden" name="department" value="CET" />
       <input type="hidden" name="listed" value="1" />
 
-      {selectedDepartment ? (
-        <div className="space-y-3">
-          <div className="rounded-lg border border-line bg-slate-50 px-4 py-3 text-xs text-muted">
-            <p>
-              <strong className="text-ink">
-                {selectedDepartment === "unassigned"
-                  ? "Programs without a college"
-                  : selectedDepartment}
-              </strong>{" "}
-              — Course-based attendance sheets for programs in this college. Each program sheet
-              includes faculty who teach its major/professional subjects, plus custom additions.
-            </p>
-            {departmentPrograms.length > 0 ? (
-              <p className="mt-1">
-                Programs linked to this college:{" "}
-                {departmentPrograms.map((p) => p.code).join(", ")}
-              </p>
-            ) : null}
-          </div>
+      <div className="rounded-lg border border-line bg-slate-50 px-4 py-3 text-xs text-muted">
+        <p>
+          <strong className="text-ink">College of Engineering and Technology (CET)</strong>{" "}
+          — Course-based attendance sheets for CET programs. Each program sheet includes faculty
+          who teach its major/professional subjects, plus custom additions.
+        </p>
+        {departmentPrograms.length > 0 ? (
+          <p className="mt-1">
+            CET Programs:{" "}
+            <span className="font-medium text-ink">
+              {departmentPrograms.map((p) => p.code).join(", ")}
+            </span>
+          </p>
+        ) : null}
+      </div>
 
-          {departmentPrograms.length > 1 ? (
-            <div className="space-y-2">
-              <div className="flex flex-wrap items-center gap-3">
-                <p className="label mb-0 text-xs">Filter programs in {selectedDepartment} (optional):</p>
-                <button
-                  type="button"
-                  className="text-xs underline text-navy"
-                  onClick={() =>
-                    setChecked(
-                      new Set(
-                        checked.size > 0 ? [] : departmentPrograms.map((p) => p.code),
-                      ),
-                    )
-                  }
-                >
-                  {checked.size > 0 ? "Clear selection" : "Select all"}
-                </button>
-                <span className="text-xs text-muted">
-                  {checked.size > 0 ? `${checked.size} selected` : "All programs included"}
-                </span>
-              </div>
-              <div className="flex max-h-28 flex-wrap gap-x-4 gap-y-2 overflow-auto rounded-lg border border-line bg-white px-3 py-2">
-                {departmentPrograms.map((p) => (
-                  <label key={p.code} className="flex items-center gap-2 text-xs">
-                    <input
-                      type="checkbox"
-                      name="programs"
-                      value={p.code}
-                      checked={checked.has(p.code)}
-                      onChange={(e) => {
-                        const next = new Set(checked);
-                        if (e.target.checked) next.add(p.code);
-                        else next.delete(p.code);
-                        setChecked(next);
-                      }}
-                    />
-                    <span className="font-medium text-ink">{p.code}</span>
-                    {p.name ? <span className="text-muted">({p.name})</span> : null}
-                  </label>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </div>
-      ) : (
-        <div className="space-y-3">
+      {departmentPrograms.length > 1 ? (
+        <div className="space-y-2">
           <div className="flex flex-wrap items-center gap-3">
-            <p className="label mb-0">Optional program filter</p>
+            <p className="label mb-0 text-xs">Filter programs in CET (optional):</p>
             <button
               type="button"
-              className="text-xs underline"
+              className="text-xs underline text-navy"
               onClick={() =>
                 setChecked(
                   new Set(
-                    checked.size > 0
-                      ? []
-                      : Array.from(
-                          new Set([
-                            ...colleges.flatMap((c) => c.programs.map((p) => p.code)),
-                            ...unassigned.map((p) => p.code),
-                          ]),
-                        ),
+                    checked.size > 0 ? [] : departmentPrograms.map((p) => p.code),
                   ),
                 )
               }
             >
-              {checked.size > 0 ? "Clear" : "Select all"}
+              {checked.size > 0 ? "Clear selection" : "Select all"}
             </button>
-            <span className="text-xs text-muted">{checked.size} selected</span>
+            <span className="text-xs text-muted">
+              {checked.size > 0 ? `${checked.size} selected` : "All programs included"}
+            </span>
           </div>
-          <div className="flex max-h-28 flex-wrap gap-x-4 gap-y-2 overflow-auto rounded-lg border border-line bg-white px-3 py-2">
-            {colleges
-              .flatMap((c) => c.programs)
-              .concat(unassigned)
-              .map((p) => (
-                <label key={p.code} className="flex items-center gap-2 text-sm">
+
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 md:grid-cols-5">
+            {departmentPrograms.map((p) => {
+              const active = checked.has(p.code);
+              return (
+                <label
+                  key={p.code}
+                  className={
+                    "flex cursor-pointer items-start gap-2 rounded-lg border p-2.5 text-xs transition-colors " +
+                    (active
+                      ? "border-navy bg-navy/5 text-navy font-medium"
+                      : "border-line bg-white hover:border-slate-300 text-ink")
+                  }
+                >
                   <input
                     type="checkbox"
                     name="programs"
                     value={p.code}
-                    checked={checked.has(p.code)}
+                    checked={active}
                     onChange={(e) => {
                       const next = new Set(checked);
                       if (e.target.checked) next.add(p.code);
                       else next.delete(p.code);
                       setChecked(next);
                     }}
+                    className="mt-0.5 rounded border-line"
                   />
-                  <span>{p.code}</span>
+                  <span className="min-w-0">
+                    <span className="block font-semibold">{p.code}</span>
+                    <span className="block truncate text-[11px] text-muted">
+                      {p.name ?? "unnamed"}
+                    </span>
+                  </span>
                 </label>
-              ))}
-            {totalPrograms === 0 ? (
-              <span className="text-sm text-muted">No programs on file yet.</span>
-            ) : null}
+              );
+            })}
           </div>
-          <p className="text-xs text-muted">
-            Leave every program unchecked to print all programs. This legacy filter only narrows
-            the sheets; faculty membership still comes from the registered department.
-          </p>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

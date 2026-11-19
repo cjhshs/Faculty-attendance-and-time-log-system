@@ -4,6 +4,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { formatLong } from "@/lib/dates";
 import { ScrollArea } from "../ScrollArea";
+import { SortableTable } from "../SortableTable";
 import { SearchForm } from "../SearchForm";
 
 export default async function AuditPage({
@@ -48,20 +49,31 @@ export default async function AuditPage({
         className="card"
       />
 
-      <ScrollArea className="card">
-        <table className="data-table">
+      <ScrollArea className="card" label="Audit log">
+        <SortableTable className="data-table" label="Audit log">
+          <caption className="visually-hidden">Audit log</caption>
           <thead>
             <tr>
-              <th scope="col">When</th>
-              <th scope="col">User</th>
-              <th scope="col">Action</th>
-              <th scope="col">Details</th>
+              <th scope="col">
+                <button type="button">When</button>
+              </th>
+              <th scope="col">
+                <button type="button">User</button>
+              </th>
+              <th scope="col">
+                <button type="button">Action</button>
+              </th>
+              <th scope="col">
+                <button type="button">Details</button>
+              </th>
             </tr>
           </thead>
           <tbody>
             {logs.map((log) => (
               <tr key={log.id}>
-                <td className="whitespace-nowrap">{formatLong(log.createdAt)}</td>
+                <td className="whitespace-nowrap" data-value={log.createdAt.toISOString()}>
+                  {formatLong(log.createdAt)}
+                </td>
                 <td>{log.user?.name ?? "—"}</td>
                 <td className="font-mono text-xs">{log.action}</td>
                 <td>{log.details}</td>
@@ -75,7 +87,7 @@ export default async function AuditPage({
               </tr>
             ) : null}
           </tbody>
-        </table>
+        </SortableTable>
       </ScrollArea>
 
       <div className="flex items-center justify-between text-sm">

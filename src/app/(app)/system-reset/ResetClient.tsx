@@ -1,7 +1,7 @@
 "use client";
 
-import { useActionState, useEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { useActionState, useEffect, useRef, useState } from "react";
+import { Modal } from "../Modal";
 import {
   RESET_CONFIRMATION_PHRASE,
   totalOperational,
@@ -180,6 +180,7 @@ function CountTable({
   return (
     <div className="overflow-hidden rounded-lg border border-line">
       <table className="data-table">
+        <caption className="visually-hidden">{title}</caption>
         <thead>
           <tr>
             <th scope="col">{title}</th>
@@ -228,18 +229,14 @@ function ResetModal({
     if (submitted.current && !pending && state.ok) onCancel();
   }, [state.ok, pending, onCancel]);
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !pending) onCancel();
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onCancel, pending]);
-
-  if (typeof document === "undefined") return null;
-
-  const content = (
-    <ModalShell onCancel={pending ? undefined : onCancel} label="Confirm operational data reset">
+  return (
+    <Modal
+      open
+      onClose={onCancel}
+      label="Confirm operational data reset"
+      dismissible={!pending}
+      className="max-w-lg"
+    >
       <h2 className="section-title">Reset operational data</h2>
       <p className="mt-2 text-sm">
         This permanently deletes <strong>{num(total)}</strong> operational record(s): attendance,
@@ -286,36 +283,6 @@ function ResetModal({
           </button>
         </div>
       </form>
-    </ModalShell>
-  );
-
-  return createPortal(content, document.body);
-}
-
-function ModalShell({
-  children,
-  label,
-  onCancel,
-}: {
-  children: ReactNode;
-  label: string;
-  onCancel?: () => void;
-}) {
-  return (
-    <div
-      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/40 px-4 py-6"
-      onClick={onCancel}
-      role="presentation"
-    >
-      <div
-        className="max-h-full w-full max-w-lg overflow-y-auto rounded-xl border border-line bg-white p-5 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-        role="dialog"
-        aria-modal="true"
-        aria-label={label}
-      >
-        {children}
-      </div>
-    </div>
+    </Modal>
   );
 }

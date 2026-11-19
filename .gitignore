@@ -51,3 +51,7 @@ next-env.d.ts
 # executables and installer binaries (exceeds GitHub 100MB limit)
 *.exe
 
+# local agent/skill tooling
+/.agents/
+/skills-lock.json
+

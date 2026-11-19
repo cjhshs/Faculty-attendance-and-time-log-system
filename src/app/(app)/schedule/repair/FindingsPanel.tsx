@@ -25,18 +25,18 @@ export type FindingItem = {
 };
 
 const STATUS_TONE: Record<string, string> = {
-  open: "bg-zinc-100 text-zinc-700",
-  accepted: "bg-green-100 text-green-800",
-  rejected: "bg-zinc-200 text-zinc-700",
-  unresolved: "bg-red-100 text-red-800",
-  applied: "bg-blue-100 text-blue-800",
+  open: "badge-neutral",
+  accepted: "badge-success",
+  rejected: "badge-neutral",
+  unresolved: "badge-danger",
+  applied: "badge-info",
 };
 
 const SEVERITY_TONE: Record<string, string> = {
-  error: "bg-red-100 text-red-800",
-  review: "bg-amber-100 text-amber-800",
-  warning: "bg-amber-50 text-amber-700",
-  info: "bg-sky-50 text-sky-700",
+  error: "badge-danger",
+  review: "badge-warn",
+  warning: "badge-warn",
+  info: "badge-info",
 };
 
 export function FindingsPanel({
@@ -110,9 +110,9 @@ function FindingRow({ finding, aiEnabled }: { finding: FindingItem; aiEnabled: b
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-mono text-xs text-muted">Row {finding.rowNumber}</span>
         {finding.cn ? <span className="font-mono text-xs text-muted">CN {finding.cn}</span> : null}
-        <span className={"badge " + (SEVERITY_TONE[finding.severity] ?? "bg-zinc-100")}>{finding.severity}</span>
+        <span className={"badge " + (SEVERITY_TONE[finding.severity] ?? "badge-neutral")}>{finding.severity}</span>
         <span className="badge bg-navy/5 text-navy">{finding.label}</span>
-        <span className={"badge " + (STATUS_TONE[finding.status] ?? "bg-zinc-100")}>{finding.status}</span>
+        <span className={"badge " + (STATUS_TONE[finding.status] ?? "badge-neutral")}>{finding.status}</span>
       </div>
       <p className="mt-1 text-sm text-navy">{finding.explanation}</p>
       <p className="mt-1 text-xs text-muted">

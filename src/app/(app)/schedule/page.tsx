@@ -171,7 +171,7 @@ export default async function SchedulePage({
         ? `${activeCollege.code} — ${activeCollege.name} (${activeCollege.programs.length} program${
             activeCollege.programs.length === 1 ? "" : "s"
           })`
-        : `All colleges (${collegeOptions.all.length} programs)`;
+        : `CET — College of Engineering and Technology (${collegeOptions.all.length} programs)`;
   const hasScope = Boolean(scope.college || scope.program);
   const clearHref = (() => {
     const next = new URLSearchParams();
@@ -278,7 +278,7 @@ export default async function SchedulePage({
         ) : null}
       </p>
 
-      <ScrollArea className="card">
+      <ScrollArea className="card" label="Schedule">
         <ScheduleTable
           rows={rows}
           faculty={facultyOptions}

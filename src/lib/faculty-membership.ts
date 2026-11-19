@@ -5,7 +5,7 @@
 // program. These helpers are deliberately pure so the same rules are used by the
 // initial roster, the importer and the tests.
 
-import { facultyNameKey, normalizeFacultyName } from "./faculty-department";
+import { facultyNameKey, facultyNameMatches } from "./faculty-department";
 
 export type MembershipFaculty = {
   id: number;
@@ -483,10 +483,8 @@ export function planRosterMembership(
 ): RosterMembershipPlan {
   const target = departmentCode.trim().toUpperCase();
   const rows: RosterMembershipRow[] = candidates.map((candidate) => {
-    const key = facultyNameKey(candidate.fullName);
-    const norm = normalizeFacultyName(candidate.fullName);
     const matches = roster
-      .filter((faculty) => facultyNameKey(faculty.fullName) === key || normalizeFacultyName(faculty.fullName) === norm)
+      .filter((faculty) => facultyNameMatches(candidate.fullName, faculty.fullName))
       .map((faculty) => ({
         id: faculty.id,
         fullName: faculty.fullName,
@@ -578,17 +576,12 @@ export function resolveInstructorLink(
     // this normalized name. It cannot redirect a name to an unrelated faculty
     // member, so a mistyped payload cannot re-link history to the wrong person.
     const match = roster.find((faculty) => faculty.id === explicit);
-    return match && facultyNameKey(match.fullName) === key
+    return match && facultyNameMatches(name, match.fullName)
       ? { kind: "linked", facultyId: match.id, via: "explicit" }
       : { kind: "invalid-explicit", facultyId: explicit };
   }
 
-  const norm = normalizeFacultyName(name);
-  const matches = roster.filter(
-    (faculty) =>
-      facultyNameKey(faculty.fullName) === key ||
-      normalizeFacultyName(faculty.fullName) === norm
-  );
+  const matches = roster.filter((faculty) => facultyNameMatches(name, faculty.fullName));
   if (matches.length === 1) {
     return { kind: "linked", facultyId: matches[0].id, via: "roster" };
   }

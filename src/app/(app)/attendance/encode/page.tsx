@@ -43,7 +43,7 @@ export default async function EncodePage({
   const defaultDate = parseISODate(getTodayLocalDate()) ?? todayUtc();
   const date = parseISODate(params.date ?? null) ?? defaultDate;
   const isoDate = formatISODate(date);
-  const department = (params.department ?? params.college ?? "").trim();
+  const department = (params.department ?? params.college ?? "CET").trim() || "CET";
   const requestedTerm =
     params.schoolYear || params.semester
       ? parseTerm(params.schoolYear, params.semester)
@@ -107,8 +107,11 @@ export default async function EncodePage({
     );
   }
 
-  // Legacy per-program scope (used only when no department is selected).
-  const pool = scope.program
+  // The encode grid loads EVERY program in the selected scope, not just the
+  // first one. Selecting "All CET programs" (or the CET department) therefore
+  // shows every CET course, exactly like the printable sheet, instead of only
+  // the alphabetically first program.
+  const selectedCourses = scope.program
     ? allCourses.filter((c) => c.code === scope.program)
     : scope.college
       ? allCourses.filter((c) =>
@@ -123,9 +126,8 @@ export default async function EncodePage({
               : c.college?.code.toUpperCase() === department.toUpperCase(),
           )
         : allCourses;
-  const selected = pool[0];
 
-  if (!selected) {
+  if (selectedCourses.length === 0) {
     return (
       <div className="space-y-4">
         <h1 className="page-title">Encode Attendance</h1>
@@ -144,10 +146,10 @@ export default async function EncodePage({
   const isPast = date < todayUtc();
   const canEditPast = hasPermission(user, PERMISSIONS.ATTENDANCE_EDIT_PAST);
 
-  // Retrieve course-based schedules for the selected program
-  const slots = await getSlotsForDateAndCourses(date, [selected.id], selectedTerm);
-
-  const courseIds = [selected.id];
+  const courseIds = selectedCourses.map((c) => c.id);
+  // Every course in scope is queried for the selected term, so a department-wide
+  // grid can never silently drop a program (or its faculty) from the sheet.
+  const slots = await getSlotsForDateAndCourses(date, courseIds, selectedTerm);
   const [existing, savedSessions, holiday] = await Promise.all([
     slots.length
       ? prisma.attendance.findMany({
@@ -170,7 +172,7 @@ export default async function EncodePage({
   const daySheetKey = buildSheetKey({
     date,
     department: scope.college || department || null,
-    programs: [selected.code],
+    programs: selectedCourses.map((c) => c.code),
     schoolYear: selectedTerm.schoolYear,
     semester: selectedTerm.semester,
   });
@@ -181,14 +183,20 @@ export default async function EncodePage({
   ]);
 
   const manuallyAddedIds = new Set(customEntries.map((c) => c.facultyId));
-  const qualifiedFacultyIds = getQualifiedFacultyIdsForCourse(
-    slots,
-    selected.code,
-    {
+  // Rule B is evaluated per program (exactly like the printable sheet) and the
+  // qualifying faculty are unioned across every program in scope. A faculty
+  // member who qualifies for any program in the scope therefore appears, so a
+  // department-wide grid never hides a scheduled faculty member behind a single
+  // program's major-subject filter.
+  const qualifiedFacultyIds = new Set<number>();
+  for (const course of selectedCourses) {
+    const courseSlots = slots.filter((s) => s.courseId === course.id);
+    const qualified = getQualifiedFacultyIdsForCourse(courseSlots, course.code, {
       manuallyAddedFacultyIds: manuallyAddedIds,
       excludedFacultyIds: excludedIds,
-    },
-  );
+    });
+    for (const id of qualified) qualifiedFacultyIds.add(id);
+  }
 
   const activeSlots = slots.filter(
     (s) => s.facultyId != null && qualifiedFacultyIds.has(s.facultyId),
@@ -266,9 +274,13 @@ export default async function EncodePage({
 
   const locked = !canEditPast && (isPast || savedSession != null);
 
+  // A specific program selection is its own working scope: it gets its own
+  // draft and remounts the grid, so a program grid never inherits the
+  // department-wide grid's unsaved cells (and vice versa).
+  const programCode = scope.program || null;
   const scopeKey = attendanceDraftScopeKey({
-    department: department || null,
-    courseCode: department ? null : selected?.code,
+    department: programCode ? `${department}·${programCode}` : department || null,
+    courseCode: null,
     date: isoDate,
     schoolYear: selectedTerm.schoolYear,
     semester: selectedTerm.semester,
@@ -280,11 +292,15 @@ export default async function EncodePage({
     ? parseDraftPayload({ ...(draftRow.payload as object), version: draftRow.version })
     : null;
 
-  const targetLabel = department
-    ? department === "unassigned"
-      ? "Faculty without a department"
-      : `${department} — ${collegeOptions.colleges.find((c) => c.code === department)?.name ?? ""}`
-    : selected!.code;
+  const targetLabel = programCode
+    ? `${department} · ${programCode}`
+    : department
+      ? department === "unassigned"
+        ? "Faculty without a department"
+        : `${department} — ${collegeOptions.colleges.find((c) => c.code === department)?.name ?? ""}`
+      : selectedCourses.length === 1
+        ? selectedCourses[0].code
+        : "All programs";
 
   const facultyInDepartment = department
     ? await prisma.faculty.count({
@@ -313,8 +329,8 @@ export default async function EncodePage({
             {selectedTerm.semester}
             {department
               ? " — all programs taught by this department's registered faculty"
-              : selected!.college
-                ? ` — ${selected!.college.name}`
+              : selectedCourses[0]?.college
+                ? ` — ${selectedCourses[0].college.name}`
                 : " — Unassigned"}
           </p>
         </div>
@@ -372,36 +388,14 @@ export default async function EncodePage({
             ))}
           </select>
         </div>
-        <div>
-          <label className="label" htmlFor="encode-department">
-            Department (faculty roster)
-          </label>
-          <select
-            id="encode-department"
-            name="department"
-            className="input"
-            defaultValue={department}
-          >
-            <option value="">Program mode (legacy)</option>
-            {collegeOptions.colleges.map((c) => (
-              <option key={c.code} value={c.code}>
-                {c.code} — {c.name}
-              </option>
-            ))}
-            {collegeOptions.unassigned.length > 0 ? (
-              <option value="unassigned">Faculty without a department</option>
-            ) : null}
-          </select>
-        </div>
-        {!department ? (
-          <CollegeCourseFilter
-            colleges={collegeOptions.colleges}
-            unassigned={collegeOptions.unassigned}
-            college={scope.college ?? ""}
-            program={selected?.code ?? ""}
-            idPrefix="encode"
-          />
-        ) : null}
+        <input type="hidden" name="department" value="CET" />
+        <CollegeCourseFilter
+          colleges={collegeOptions.colleges}
+          unassigned={collegeOptions.unassigned}
+          college="CET"
+          program={params.program ?? ""}
+          idPrefix="encode"
+        />
         <button type="submit" className="btn btn-primary">
           Load
         </button>
@@ -471,8 +465,8 @@ export default async function EncodePage({
         scopeKey={scopeKey}
         schoolYear={selectedTerm.schoolYear}
         semester={selectedTerm.semester}
-        departmentCode={department || null}
-        courseCode={department ? null : selected!.code}
+        departmentCode={programCode ? null : department || null}
+        courseCode={programCode ?? null}
         dateLabel={formatLong(date)}
         columns={columns}
         rows={rows}

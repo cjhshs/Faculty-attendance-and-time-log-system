@@ -28,28 +28,23 @@ export async function createFaculty(formData: FormData): Promise<ActionResult> {
     where: { fullName: { equals: fullName, mode: "insensitive" } },
   });
   if (exists) return { ok: false, message: "That faculty name already exists." };
-  const rawDepartment = String(formData.get("departmentId") || "").trim();
-  const departmentId = rawDepartment ? Number(rawDepartment) : null;
-  if (departmentId !== null && !Number.isInteger(departmentId)) {
-    return { ok: false, message: "Invalid department." };
-  }
-  if (departmentId !== null) {
-    const college = await prisma.college.findUnique({ where: { id: departmentId } });
-    if (!college) return { ok: false, message: "Department not found." };
-  }
+
+  const cet = await prisma.college.findFirst({ where: { code: "CET" } });
+  const departmentId = cet?.id ?? null;
+
   const row = await prisma.faculty.create({
     data: { fullName, surname: surnameOf(fullName), departmentId },
   });
   await writeAudit(
     user.id,
     "faculty.create",
-    `Created faculty #${row.id} ${fullName}${departmentId ? ` (department #${departmentId})` : ""}`,
+    `Created CET faculty #${row.id} ${fullName}`,
   );
   revalidatePath("/master");
   revalidatePath("/attendance/encode");
   revalidatePath("/attendance/print");
   revalidatePath("/summary");
-  return { ok: true, message: `Added ${fullName}.` };
+  return { ok: true, message: `Added ${fullName} to CET.` };
 }
 
 // Assign (or clear) a faculty member's official department. Only this roster
@@ -75,7 +70,6 @@ export async function updateFacultyDepartment(formData: FormData): Promise<Actio
   if (!result.ok) return { ok: false, message: result.message };
 
   revalidatePath("/master");
-  revalidatePath("/departments");
   revalidatePath("/attendance/encode");
   revalidatePath("/attendance/print");
   revalidatePath("/summary");
@@ -100,7 +94,6 @@ export async function removeFacultyDepartment(formData: FormData): Promise<Actio
   if (!result.ok) return { ok: false, message: result.message };
 
   revalidatePath("/master");
-  revalidatePath("/departments");
   revalidatePath("/attendance/encode");
   revalidatePath("/attendance/print");
   revalidatePath("/summary");
@@ -119,7 +112,6 @@ export async function initializeCetRoster(): Promise<ActionResult> {
   });
 
   revalidatePath("/master");
-  revalidatePath("/departments");
   revalidatePath("/attendance/encode");
   revalidatePath("/attendance/print");
   revalidatePath("/summary");
@@ -180,7 +172,6 @@ export async function assignFacultyDepartmentBulk(formData: FormData): Promise<A
   }
 
   revalidatePath("/master");
-  revalidatePath("/departments");
   revalidatePath("/attendance/encode");
   revalidatePath("/attendance/print");
   revalidatePath("/summary");
@@ -297,6 +288,71 @@ export async function toggleFaculty(formData: FormData): Promise<ActionResult> {
   return { ok: true, message: row.active ? "Faculty deactivated." : "Faculty activated." };
 }
 
+// Delete a faculty member without ever destroying history. A faculty member who
+// is referenced by any schedule slot, attendance record, or custom-sheet entry
+// is only deactivated: the roster row, its historical schedules and every
+// attendance record stay intact and keep their owner. Only a faculty member with
+// no schedule and no attendance history is physically removed. Both outcomes are
+// audited and reported so the UI can explain exactly what happened.
+export async function deleteFaculty(formData: FormData): Promise<ActionResult> {
+  const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
+  const id = Number(formData.get("id"));
+  if (!id) return { ok: false, message: "Faculty is required." };
+  const row = await prisma.faculty.findUnique({ where: { id } });
+  if (!row) return { ok: false, message: "Faculty not found." };
+
+  const [slots, attendance, customSelections, sheetEntries] = await Promise.all([
+    prisma.scheduleSlot.count({ where: { facultyId: id } }),
+    prisma.attendance.count({ where: { slot: { facultyId: id } } }),
+    prisma.customFaculty.count({ where: { facultyId: id } }),
+    prisma.sheetCustomFaculty.count({ where: { facultyId: id } }),
+  ]);
+
+  revalidatePath("/master");
+  revalidatePath("/attendance/encode");
+  revalidatePath("/attendance/print");
+  revalidatePath("/summary");
+
+  const hasHistory = slots > 0 || attendance > 0 || customSelections > 0 || sheetEntries > 0;
+  if (hasHistory) {
+    if (!row.active) {
+      return {
+        ok: true,
+        message: `${row.fullName} is already inactive. Schedule and attendance history is preserved.`,
+      };
+    }
+    await prisma.$transaction(async (tx) => {
+      await tx.faculty.update({ where: { id }, data: { active: false } });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: "faculty.deactivate",
+          details: `Deactivated faculty #${id} ${row.fullName} instead of deleting: ${slots} schedule slot(s) and ${attendance} attendance record(s) preserved.`,
+        },
+      });
+    });
+    return {
+      ok: true,
+      message: `${row.fullName} has schedule or attendance history, so they were deactivated instead of deleted. All historical records are preserved.`,
+    };
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.faculty.delete({ where: { id } });
+    await tx.auditLog.create({
+      data: {
+        userId: user.id,
+        action: "faculty.delete",
+        details: `Deleted faculty #${id} ${row.fullName} (no schedule or attendance records).`,
+      },
+    });
+  });
+  return {
+    ok: true,
+    message: `Deleted ${row.fullName}. They had no schedule or attendance records.`,
+  };
+}
+
 export async function createCourse(formData: FormData): Promise<ActionResult> {
   const user = await assertPermission(PERMISSIONS.FACULTY_MANAGE);
   const code = String(formData.get("code") || "").trim().toUpperCase();
@@ -304,15 +360,14 @@ export async function createCourse(formData: FormData): Promise<ActionResult> {
   if (!code) return { ok: false, message: "Program code is required." };
   const exists = await prisma.course.findUnique({ where: { code } });
   if (exists) return { ok: false, message: "That program already exists." };
-  const rawCollege = String(formData.get("collegeId") || "").trim();
-  const collegeId = rawCollege ? Number(rawCollege) : null;
-  if (collegeId !== null && !Number.isInteger(collegeId)) {
-    return { ok: false, message: "Invalid college." };
-  }
-  await prisma.course.create({ data: { code, name, collegeId } });
-  await writeAudit(user.id, "course.create", `Created program ${code}${collegeId ? ` in college #${collegeId}` : ""}`);
+
+  const cet = await prisma.college.findFirst({ where: { code: "CET" } });
+  const collegeId = cet?.id ?? null;
+
+  await prisma.course.create({ data: { code, name, collegeId, official: true } });
+  await writeAudit(user.id, "course.create", `Created CET program ${code}`);
   revalidatePath("/master");
-  return { ok: true, message: `Added program ${code}.` };
+  return { ok: true, message: `Added CET program ${code}.` };
 }
 
 // Assign (or clear) the college of a program. This is how an unassigned course

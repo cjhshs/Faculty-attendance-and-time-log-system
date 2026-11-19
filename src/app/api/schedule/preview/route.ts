@@ -7,6 +7,12 @@ import { prisma } from "@/lib/prisma";
 import { describeDuplicateImport, importChecksum } from "@/lib/import-checksum";
 import { getAcademicPeriod } from "@/lib/academic-period";
 import { normalizeCourseCode } from "@/lib/college-catalog";
+import {
+  describeRangeCoverage,
+  parseImportRange,
+  resolveImportRange,
+} from "@/lib/import-range";
+import { formatISODate } from "@/lib/dates";
 
 export async function POST(request: Request) {
   const user = await getCurrentUser();
@@ -47,6 +53,11 @@ export async function POST(request: Request) {
   const collegeByCode = Object.fromEntries(
     courses.map((c) => [normalizeCourseCode(c.code), c.college?.code ?? null]),
   );
+  const rangeInput = parseImportRange(formData);
+  if (!rangeInput.ok) {
+    return NextResponse.json({ error: rangeInput.error }, { status: 400 });
+  }
+  const termLabel = `${target.schoolYear} · ${target.semester}`;
   const [plan, previous, period] = await Promise.all([
     buildPlan(buffer, target, collegeByCode),
     prisma.importBatch.findFirst({
@@ -56,8 +67,20 @@ export async function POST(request: Request) {
     getAcademicPeriod(target.schoolYear, target.semester),
   ]);
 
+  const range = resolveImportRange(rangeInput.input, period, termLabel);
+  if (!range.ok) {
+    return NextResponse.json({ error: range.error }, { status: 400 });
+  }
+
   return NextResponse.json({
     plan,
+    range: {
+      mode: range.resolved.mode,
+      startDate: range.resolved.start ? formatISODate(range.resolved.start) : null,
+      endDate: range.resolved.end ? formatISODate(range.resolved.end) : null,
+      warning: range.resolved.warning,
+      coverage: describeRangeCoverage(range.resolved),
+    },
     duplicateImport: previous
       ? {
           id: previous.id,

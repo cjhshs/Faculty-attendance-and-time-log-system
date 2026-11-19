@@ -7,6 +7,12 @@
 
 export type AttendanceStatus = "unset" | "present" | "absent";
 
+// The reason saved when a faculty member is marked absent without a typed
+// reason. It is a real stored value (not a UI placeholder), so the database,
+// validation, reports, exports and prints all show the same text. It is only
+// ever applied to an explicit absence; present/unencoded hours never receive it.
+export const DEFAULT_ABSENCE_REASON = "On Leave";
+
 export type AttendanceCounts = {
   present: number;
   absent: number;

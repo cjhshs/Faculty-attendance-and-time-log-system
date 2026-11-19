@@ -64,11 +64,12 @@ export default async function CalendarPage() {
         <h2 className="mb-3 section-title">No-class dates ({holidays.length})</h2>
         <div className="max-h-96 overflow-auto">
           <table className="data-table">
+            <caption className="visually-hidden">No-class dates</caption>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Label</th>
-                <th></th>
+                <th scope="col">Date</th>
+                <th scope="col">Label</th>
+                <th scope="col" aria-label="Actions"></th>
               </tr>
             </thead>
             <tbody>

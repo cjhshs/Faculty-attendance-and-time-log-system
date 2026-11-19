@@ -1,6 +1,7 @@
 "use client";
 
-import { useActionState, type ReactNode } from "react";
+import { useActionState, useRef, type ReactNode } from "react";
+import { useConfirm } from "./confirm";
 import type { ActionResult } from "@/app/(app)/master/actions";
 
 type Action = (formData: FormData) => Promise<ActionResult>;
@@ -32,6 +33,7 @@ export function ActionForm({
       {children}
       {state ? (
         <p
+          role={state.ok ? "status" : "alert"}
           className={
             "mt-2 rounded-lg border px-2.5 py-1.5 text-xs " +
             (state.ok
@@ -68,35 +70,48 @@ export function ActionButton({
     async (_prev: ActionResult | null, formData: FormData) => action(formData),
     null,
   );
+  const { confirm: askConfirm, dialog } = useConfirm();
+  const formRef = useRef<HTMLFormElement>(null);
   return (
-    <form action={formAction} className="inline">
-      {Object.entries(fields).map(([k, v]) => (
-        <input key={k} type="hidden" name={k} value={v} />
-      ))}
-      <button
-        type="submit"
-        disabled={pending}
-        title={title}
-        onClick={(e) => {
-          if (confirm && !window.confirm(confirm)) e.preventDefault();
-        }}
-        className={"btn btn-sm " + (variant === "danger" ? "btn-danger" : "")}
-      >
-        {pending ? "…" : label}
-      </button>
-      {state ? (
-        <span
-          role="status"
-          className={
-            "ml-2 rounded-lg border px-2.5 py-1.5 text-xs " +
-            (state.ok
-              ? "border-green-200 bg-green-50 text-green-700"
-              : "border-red-200 bg-red-50 text-red-700")
-          }
+    <>
+      {dialog}
+      <form ref={formRef} action={formAction} className="inline">
+        {Object.entries(fields).map(([k, v]) => (
+          <input key={k} type="hidden" name={k} value={v} />
+        ))}
+        <button
+          type="submit"
+          disabled={pending}
+          title={title}
+          onClick={async (e) => {
+            if (!confirm) return;
+            e.preventDefault();
+            const ok = await askConfirm({
+              title: label,
+              message: confirm,
+              tone: variant === "danger" ? "danger" : "primary",
+              confirmLabel: label,
+            });
+            if (ok) formRef.current?.requestSubmit();
+          }}
+          className={"btn btn-sm " + (variant === "danger" ? "btn-danger" : "")}
         >
-          {state.message}
-        </span>
-      ) : null}
-    </form>
+          {pending ? "…" : label}
+        </button>
+        {state ? (
+          <span
+            role={state.ok ? "status" : "alert"}
+            className={
+              "ml-2 rounded-lg border px-2.5 py-1.5 text-xs " +
+              (state.ok
+                ? "border-green-200 bg-green-50 text-green-700"
+                : "border-red-200 bg-red-50 text-red-700")
+            }
+          >
+            {state.message}
+          </span>
+        ) : null}
+      </form>
+    </>
   );
 }

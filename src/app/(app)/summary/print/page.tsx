@@ -3,7 +3,8 @@ import { requirePermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { getSettings } from "@/lib/settings";
 import { buildSummary } from "@/lib/summary";
-import { cutoffRange, parseISODate, formatLong } from "@/lib/dates";
+import { resolveSummaryRange } from "@/lib/summary-range";
+import { formatISODate, todayUtc } from "@/lib/dates";
 import { getActiveTerm, parseTerm, isValidTerm } from "@/lib/terms";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
 import { AutoPrint } from "../../attendance/AutoPrint";
@@ -13,12 +14,16 @@ export default async function SummaryPrintPage({
   searchParams,
 }: {
   searchParams: Promise<{
+    rangeMode?: string;
+    month?: string;
     start?: string;
     end?: string;
     program?: string;
     college?: string;
     department?: string;
     faculty?: string;
+    year?: string;
+    sem?: string;
     schoolYear?: string;
     semester?: string;
     autoprint?: string;
@@ -27,12 +32,15 @@ export default async function SummaryPrintPage({
   const user = await requirePermission(PERMISSIONS.SUMMARY_PRINT);
   void user;
   const params = await searchParams;
-  const def = cutoffRange();
-  const start = parseISODate(params.start ?? null) ?? def.start;
-  const end = parseISODate(params.end ?? null) ?? def.end;
+  const rangeResult = resolveSummaryRange(params);
+  if (!rangeResult.ok) {
+    return <div className="alert alert-error">{rangeResult.error}</div>;
+  }
+  const range = rangeResult.range;
+  const { start, end } = range;
 
   const collegeOptions = await getCollegeOptions();
-  const department = (params.department ?? "").trim();
+  const department = (params.department ?? "CET").trim() || "CET";
   const scope = normalizeScopeSelection(collegeOptions, {
     college: params.college,
     program: params.program,
@@ -60,15 +68,10 @@ export default async function SummaryPrintPage({
   const facultyFilter = params.faculty ? Number(params.faculty) : null;
 
   const activeTerm = await getActiveTerm();
-  const selectedTerm =
-    params.schoolYear && params.semester
-      ? parseTerm(params.schoolYear, params.semester)
-      : activeTerm;
-  if (
-    params.schoolYear &&
-    params.semester &&
-    (!selectedTerm || !isValidTerm(selectedTerm))
-  ) {
+  const rawYear = params.schoolYear ?? params.year;
+  const rawSem = params.semester ?? params.sem;
+  const selectedTerm = rawYear && rawSem ? parseTerm(rawYear, rawSem) : activeTerm;
+  if (rawYear && rawSem && (!selectedTerm || !isValidTerm(selectedTerm))) {
     return (
       <div className="alert alert-error">
         The requested school year and semester are not a valid academic period. Nothing was
@@ -85,11 +88,25 @@ export default async function SummaryPrintPage({
     facultyFilter != null ? summary.faculty.find((f) => f.facultyId === facultyFilter) ?? null : null;
   const rows = facultyFilter ? summary.faculty.filter((f) => f.facultyId === facultyFilter) : summary.faculty;
 
-  const generated = new Date().toISOString().slice(0, 10);
+  const generated = formatISODate(todayUtc());
+  const reportDetails = [
+    course ? `Program: ${course.code}` : collegeName ? `College: ${collegeName}` : null,
+    department
+      ? `Department: ${
+          department === "unassigned" ? "Faculty without a department" : department
+        }`
+      : null,
+    selectedTerm ? `${selectedTerm.schoolYear} ${selectedTerm.semester}` : null,
+    `Generated: ${generated}`,
+  ]
+    .filter(Boolean)
+    .join(" | ");
 
   const qs = new URLSearchParams({
-    start: start.toISOString().slice(0, 10),
-    end: end.toISOString().slice(0, 10),
+    rangeMode: range.mode,
+    month: range.month,
+    start: formatISODate(range.start),
+    end: formatISODate(range.end),
     ...(course ? { program: course.code } : {}),
     ...(scope.college ? { college: scope.college } : {}),
     ...(department ? { department } : {}),
@@ -144,25 +161,14 @@ export default async function SummaryPrintPage({
           <p className="text-base font-bold tracking-widest">
             {selectedFaculty ? "INDIVIDUAL FACULTY ATTENDANCE SUMMARY" : "ATTENDANCE SUMMARY"}
           </p>
+          <p className="text-sm font-semibold">{range.header}</p>
           {selectedFaculty ? (
             <p className="text-sm font-semibold">
               {selectedFaculty.name}
               {selectedFaculty.department ? ` — ${selectedFaculty.department}` : " — No department assigned"}
             </p>
           ) : null}
-          <p className="text-xs">
-            Range: {formatLong(start)} to {formatLong(end)}
-            {course ? ` — Program: ${course.code}` : collegeName ? ` — College: ${collegeName}` : ""}
-            {department
-              ? ` — Department: ${
-                  department === "unassigned"
-                    ? "Faculty without a department"
-                    : department
-                }`
-              : ""}
-            {selectedTerm ? ` — ${selectedTerm.schoolYear} ${selectedTerm.semester}` : ""} |
-            Generated: {generated}
-          </p>
+          <p className="text-xs">{reportDetails}</p>
         </div>
 
         {summary.incomplete.length > 0 ? (
@@ -207,15 +213,16 @@ export default async function SummaryPrintPage({
             </div>
 
             <table className="mt-3 w-full border-collapse text-[11px]">
+              <caption className="visually-hidden">Daily breakdown</caption>
               <thead>
                 <tr>
-                  <th className="border border-black px-1 py-0.5 text-left">Date</th>
-                  <th className="border border-black px-1 py-0.5 text-left">Program</th>
-                  <th className="border border-black px-1 py-0.5">Scheduled hrs</th>
-                  <th className="border border-black px-1 py-0.5">Present hrs</th>
-                  <th className="border border-black px-1 py-0.5">Absent hrs</th>
-                  <th className="border border-black px-1 py-0.5">Not encoded</th>
-                  <th className="border border-black px-1 py-0.5">Status</th>
+                  <th scope="col" className="border border-black px-1 py-0.5 text-left">Date</th>
+                  <th scope="col" className="border border-black px-1 py-0.5 text-left">Program</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Scheduled hrs</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Present hrs</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Absent hrs</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Not encoded</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Status</th>
                 </tr>
               </thead>
               <tbody>
@@ -242,7 +249,7 @@ export default async function SummaryPrintPage({
                       colSpan={7}
                       className="border border-black px-1 py-2 text-center text-zinc-500"
                     >
-                      No scheduled class for this faculty member in the selected range.
+                      No attendance records exist for this faculty member in the selected range.
                     </td>
                   </tr>
                 ) : null}
@@ -265,17 +272,18 @@ export default async function SummaryPrintPage({
         ) : (
           <>
             <table className="mt-3 w-full border-collapse text-[11px]">
+              <caption className="visually-hidden">Faculty attendance summary</caption>
               <thead>
                 <tr>
-                  <th className="border border-black px-1 py-0.5 text-left">Faculty</th>
-                  <th className="border border-black px-1 py-0.5 text-left">Department</th>
-                  <th className="border border-black px-1 py-0.5">Scheduled hrs</th>
-                  <th className="border border-black px-1 py-0.5">Present hrs</th>
-                  <th className="border border-black px-1 py-0.5">Absent hrs</th>
-                  <th className="border border-black px-1 py-0.5">Not encoded</th>
-                  <th className="border border-black px-1 py-0.5">Present days</th>
-                  <th className="border border-black px-1 py-0.5">Absent days</th>
-                  <th className="border border-black px-1 py-0.5">Partial days</th>
+                  <th scope="col" className="border border-black px-1 py-0.5 text-left">Faculty</th>
+                  <th scope="col" className="border border-black px-1 py-0.5 text-left">Department</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Scheduled hrs</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Present hrs</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Absent hrs</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Not encoded</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Present days</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Absent days</th>
+                  <th scope="col" className="border border-black px-1 py-0.5">Partial days</th>
                 </tr>
               </thead>
               <tbody>
@@ -301,7 +309,7 @@ export default async function SummaryPrintPage({
                     <td colSpan={9} className="border border-black px-1 py-2 text-center text-zinc-500">
                       {params.faculty
                         ? "The requested faculty member is not in this summary scope. Nothing was substituted."
-                        : "No data for this range."}
+                        : "No attendance records exist within the selected range."}
                     </td>
                   </tr>
                 ) : null}

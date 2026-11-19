@@ -1,7 +1,8 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { Modal } from "../Modal";
 import type { SignatureValues } from "@/lib/print-signature";
 
 // Floating signature editor. The button/modal are UI-only and are excluded from
@@ -18,15 +19,6 @@ export function SignatureFab({
   const [values, setValues] = useState<SignatureValues>(initial);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    function onKey(event: KeyboardEvent) {
-      if (event.key === "Escape") setOpen(false);
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [open]);
 
   function update(patch: Partial<SignatureValues>) {
     setValues((prev) => ({ ...prev, ...patch }));
@@ -80,13 +72,13 @@ export function SignatureFab({
       </button>
 
       {open ? (
-        <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/30 p-3 backdrop-blur-[1px] sm:items-center">
-          <div
-            role="dialog"
-            aria-modal="true"
-            aria-labelledby="signature-title"
-            className="w-full max-w-md rounded-xl border border-line bg-white p-4 shadow-xl"
-          >
+        <Modal
+          open
+          onClose={() => setOpen(false)}
+          labelledBy="signature-title"
+          dismissible={!saving}
+          className="max-w-md"
+        >
             <div className="flex items-start justify-between gap-3">
               <div>
                 <h2 id="signature-title" className="section-title">
@@ -171,8 +163,7 @@ export function SignatureFab({
                 </span>
               ) : null}
             </div>
-          </div>
-        </div>
+        </Modal>
       ) : null}
     </div>
   );

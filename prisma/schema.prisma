@@ -219,6 +219,12 @@ model ImportBatch {
   schoolYear   String         @map("school_year")
   semester     String
   slotCount    Int            @default(0) @map("slot_count")
+  // Calendar range selected for this import. NULL means the import used the
+  // semester default with no reviewed semester dates, so no attendance rows
+  // were pre-created. Custom ranges are validated against the academic period
+  // before they are stored here.
+  startDate    DateTime?      @map("start_date") @db.Date
+  endDate      DateTime?      @map("end_date") @db.Date
   // SHA-256 of the uploaded workbook. Lets the importer recognise the exact
   // same file being committed twice into the same academic period.
   checksum     String?

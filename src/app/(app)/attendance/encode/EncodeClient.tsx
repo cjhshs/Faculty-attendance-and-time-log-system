@@ -2,7 +2,9 @@
 
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { ScrollArea } from "../../ScrollArea";
+import { useConfirm } from "../../confirm";
 import {
+  DEFAULT_ABSENCE_REASON,
   mergeDraftWithOfficial,
   type AttendanceDraftPayload,
   type AttendanceStatus,
@@ -92,6 +94,7 @@ export function EncodeClient({
   const [message, setMessage] = useState<{ ok: boolean; text: string } | null>(null);
   const [savedInfo, setSavedInfo] = useState(session);
   const [confirmedReplace, setConfirmedReplace] = useState(false);
+  const { confirm, dialog } = useConfirm();
   const [query, setQuery] = useState(initialDraft?.query ?? "");
   const [conflict, setConflict] = useState<{ payload: AttendanceDraftPayload; version: number } | null>(
     null,
@@ -102,6 +105,10 @@ export function EncodeClient({
   // A 401/403 from the API means the session (or permission) is gone. Work is
   // kept in this tab and the DB draft, so the user can sign in and retry.
   const [authExpired, setAuthExpired] = useState(false);
+  // Bulk selection: the set of hourly-entry keys currently ticked. Selection is
+  // transient (never saved) and is cleared after a bulk action or a save.
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const lastSelected = useRef<{ col: number; row: number } | null>(null);
 
   // Autosave working state as a private draft. This never writes attendance.
   useEffect(() => {
@@ -215,18 +222,147 @@ export function EncodeClient({
     setTouched(true);
   }
 
+  // Change one hour's status. Marking Absent seeds the documented default reason
+  // ("On Leave") so the saved value is real; switching back to Present or
+  // clearing the control drops the reason, because a present hour has none.
+  function setStatus(key: string, status: AttendanceStatus) {
+    setValues((prev) => {
+      const current = prev[key] ?? { status: "unset" as const, reason: "", roomOverride: "" };
+      const reason =
+        status === "absent"
+          ? current.reason.trim()
+            ? current.reason
+            : DEFAULT_ABSENCE_REASON
+          : "";
+      return { ...prev, [key]: { ...current, status, reason } };
+    });
+    setTouched(true);
+    setDirty(true);
+    setMessage(null);
+  }
+
+  function toggleSelect(
+    cellKey: string,
+    colIndex: number,
+    rowIndex: number,
+    shiftKey: boolean,
+  ) {
+    // Read and update the anchor OUTSIDE the state updater. React may call an
+    // updater more than once (StrictMode in development); mutating a ref inside
+    // it would let the first pass overwrite the anchor before the authoritative
+    // pass runs, collapsing a Shift-click range down to just its endpoint.
+    const last = lastSelected.current;
+    const range =
+      shiftKey && last && last.col === colIndex
+        ? { from: Math.min(last.row, rowIndex), to: Math.max(last.row, rowIndex) }
+        : null;
+    lastSelected.current = { col: colIndex, row: rowIndex };
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (range) {
+        for (let r = range.from; r <= range.to; r++) {
+          const cell = rows[r]?.cells[colIndex];
+          if (cell) next.add(cell.key);
+        }
+      } else if (next.has(cellKey)) {
+        next.delete(cellKey);
+      } else {
+        next.add(cellKey);
+      }
+      return next;
+    });
+  }
+
+  function selectAllCells() {
+    setSelected(new Set(allCells.map((cell) => cell.key)));
+    lastSelected.current = null;
+  }
+
+  // Select every scheduled hour that is part of a run of two or more
+  // back-to-back hours in its column (a class block), leaving isolated single
+  // hours untouched.
+  function selectConsecutiveCells() {
+    const next = new Set<string>();
+    columns.forEach((_col, colIndex) => {
+      let run: string[] = [];
+      const flush = () => {
+        if (run.length >= 2) for (const key of run) next.add(key);
+        run = [];
+      };
+      for (let r = 0; r < rows.length; r++) {
+        const cell = rows[r].cells[colIndex];
+        if (cell) run.push(cell.key);
+        else flush();
+      }
+      flush();
+    });
+    setSelected(next);
+    lastSelected.current = null;
+  }
+
+  function clearSelection() {
+    setSelected(new Set());
+    lastSelected.current = null;
+  }
+
+  // Apply Present/Absent to every selected hour at once. Overwriting an hour
+  // that already has a saved (official) value is confirmed first. The change
+  // only lives in the working grid; the normal Save Attendance flow still
+  // writes it, so drafts and validation behave exactly as for a single edit.
+  async function bulkApply(status: AttendanceStatus) {
+    const keys = Array.from(selected);
+    if (keys.length === 0) return;
+    const overwriting = keys.filter((key) => {
+      const officialValue = officialValues[key];
+      return !!officialValue && officialValue.status !== "unset" && officialValue.status !== status;
+    });
+    if (overwriting.length > 0) {
+      const ok = await confirm({
+        title: "Overwrite saved records?",
+        message: `${overwriting.length} of the ${keys.length} selected hour(s) already have a saved value. Overwrite ${
+          overwriting.length === 1 ? "it" : "them"
+        } with ${status === "present" ? "Present" : "Absent"}?`,
+        confirmLabel: "Overwrite",
+        tone: "danger",
+      });
+      if (!ok) return;
+    }
+    setValues((prev) => {
+      const next = { ...prev };
+      for (const key of keys) {
+        const current = next[key] ?? { status: "unset" as const, reason: "", roomOverride: "" };
+        const reason =
+          status === "absent"
+            ? current.reason.trim()
+              ? current.reason
+              : DEFAULT_ABSENCE_REASON
+            : "";
+        next[key] = { ...current, status, reason };
+      }
+      return next;
+    });
+    setTouched(true);
+    setDirty(true);
+    setMessage({
+      ok: true,
+      text: `${keys.length} hour(s) marked ${status === "present" ? "Present" : "Absent"}. Review, then Save Attendance.`,
+    });
+  }
+
   async function save() {
     if (hasInvalid) {
       setMessage({ ok: false, text: "Add a reason for every absence before saving." });
       return;
     }
     if (savedInfo && !confirmedReplace) {
-      if (
-        !window.confirm(
-          "Attendance for this date and scope is already saved. Replace the saved values?",
-        )
-      )
-        return;
+      const ok = await confirm({
+        title: "Replace saved attendance?",
+        message:
+          "Attendance for this date and scope is already saved. Replace the saved values with what is in this grid?",
+        confirmLabel: "Replace",
+        tone: "danger",
+      });
+      if (!ok) return;
       setConfirmedReplace(true);
     }
     const records = allCells
@@ -312,6 +448,7 @@ export function EncodeClient({
       draftVersion.current = 0;
       setRestoredDraft(false);
       setSaveState("idle");
+      clearSelection();
     } catch (e) {
       setMessage({ ok: false, text: e instanceof Error ? e.message : "Could not save attendance." });
     } finally {
@@ -320,7 +457,13 @@ export function EncodeClient({
   }
 
   async function discardDraft() {
-    if (!window.confirm("Discard this draft and restore the last saved attendance values?")) return;
+    const ok = await confirm({
+      title: "Discard this draft?",
+      message: "Discard this draft and restore the last saved attendance values?",
+      confirmLabel: "Discard draft",
+      tone: "danger",
+    });
+    if (!ok) return;
     try {
       await fetch(`/api/attendance/draft?scopeKey=${encodeURIComponent(scopeKey)}`, {
         method: "DELETE",
@@ -365,6 +508,7 @@ export function EncodeClient({
 
   return (
     <div className="space-y-3">
+      {dialog}
       {authExpired ? (
         <div className="alert alert-error block text-sm" role="alert">
           <p className="font-semibold">Your session has expired.</p>
@@ -388,19 +532,19 @@ export function EncodeClient({
           {dateLabel} — {targetLabel}
         </span>
         {savedInfo ? (
-          <span className="badge bg-green-100 text-green-800">
+          <span className="badge badge-success">
             Saved by {savedInfo.savedByName}
             {savedInfo.savedAt ? ` on ${savedInfo.savedAt.slice(0, 10)}` : ""}
           </span>
         ) : (
-          <span className="badge bg-zinc-200 text-zinc-700">Not encoded</span>
+          <span className="badge badge-neutral">Not encoded</span>
         )}
         {dirty ? (
-          <span className="badge bg-amber-100 text-amber-800">
+          <span className="badge badge-warn">
             {restoredDraft ? "Draft restored" : "Unsaved changes"}
           </span>
         ) : savedInfo ? null : (
-          <span className="badge bg-zinc-100 text-zinc-600">Draft</span>
+          <span className="badge badge-neutral">Draft</span>
         )}
         <DraftIndicator
           state={saveState}
@@ -434,7 +578,7 @@ export function EncodeClient({
       </div>
 
       {conflict ? (
-        <div className="alert alert-warn block text-sm">
+        <div className="alert alert-warn block text-sm" role="alert">
           <p className="font-semibold">A newer draft was saved in another tab.</p>
           <p className="mt-1 text-xs">
             Your current edits have not been overwritten. Choose which version to keep.
@@ -464,12 +608,64 @@ export function EncodeClient({
         </p>
       ) : null}
 
-      <ScrollArea className="rounded-md border border-zinc-200 bg-white">
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-white px-3 py-2 text-xs">
+        <span className="font-semibold">{selected.size} selected</span>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={selectAllCells}
+          disabled={locked || allCells.length === 0}
+        >
+          Select all
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={selectConsecutiveCells}
+          disabled={locked || allCells.length === 0}
+          title="Select every run of back-to-back hours in each column"
+        >
+          Select all consecutive
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-primary"
+          onClick={() => bulkApply("present")}
+          disabled={locked || selected.size === 0}
+        >
+          Mark present
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm btn-danger"
+          onClick={() => bulkApply("absent")}
+          disabled={locked || selected.size === 0}
+        >
+          Mark absent
+        </button>
+        <button
+          type="button"
+          className="btn btn-sm"
+          onClick={clearSelection}
+          disabled={selected.size === 0}
+        >
+          Cancel
+        </button>
+        <span className="text-muted">
+          Tick hourly entries (Shift-click for a range), then mark them in one go.
+        </span>
+      </div>
+
+      <ScrollArea
+        className="rounded-md border border-zinc-200 bg-white"
+        label="Attendance encoding grid"
+      >
         <table className="w-full border-collapse text-xs">
           <thead>
             <tr>
               <th
                 rowSpan={2}
+                scope="col"
                 className="sticky left-0 top-0 z-30 min-w-[5.5rem] border border-zinc-300 bg-zinc-100 px-2 py-1 shadow-[1px_0_0_0_#d4d4d8]"
               >
                 TIME
@@ -480,6 +676,7 @@ export function EncodeClient({
                   <th
                     key={col.facultyId}
                     colSpan={2}
+                    scope="colgroup"
                     className={
                       "min-w-[15rem] border border-zinc-300 px-2 py-1 text-center font-bold " +
                       (filtering && !matched ? "bg-zinc-50 text-zinc-400" : "bg-zinc-100")
@@ -493,8 +690,8 @@ export function EncodeClient({
             <tr>
               {columns.map((col) => (
                 <Fragment key={col.facultyId}>
-                  <th className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-[10px]">ROOM</th>
-                  <th className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-[10px]">ENTRY</th>
+                  <th scope="col" className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-[10px]">ROOM</th>
+                  <th scope="col" className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-[10px]">ENTRY</th>
                 </Fragment>
               ))}
             </tr>
@@ -510,20 +707,37 @@ export function EncodeClient({
                   const dimClass = dim ? "opacity-40" : "";
                   const spot = layout[colIndex][rowIndex];
                   const cell = row.cells[colIndex];
+                  const cellValue = cell ? values[cell.key] : undefined;
+                  const cellStatus = cellValue?.status ?? "unset";
+                  // Light green = Present, light red = Absent, neutral = blank.
+                  // The tint lives on the entry cell so the whole hour reads at a
+                  // glance without changing the existing grid structure.
+                  const statusClass =
+                    cellStatus === "present"
+                      ? "bg-green-50"
+                      : cellStatus === "absent"
+                        ? "bg-red-50"
+                        : "";
                   const entry = cell ? (
                     <EntryControl
                       cell={cell}
-                      value={values[cell.key]}
+                      value={cellValue}
                       locked={locked}
                       invalid={
-                        values[cell.key]?.status === "absent" &&
-                        (values[cell.key]?.reason ?? "").trim().length < 2
+                        cellStatus === "absent" && (cellValue?.reason ?? "").trim().length < 2
                       }
+                      checked={selected.has(cell.key)}
+                      onToggleCheck={(shiftKey) =>
+                        toggleSelect(cell.key, colIndex, rowIndex, shiftKey)
+                      }
+                      setStatus={(status) => setStatus(cell.key, status)}
                       update={update}
                     />
                   ) : (
                     <span className="text-zinc-300">—</span>
                   );
+                  const entryCellClass =
+                    "min-w-[11rem] border border-zinc-200 px-1 py-1 " + statusClass + " " + dimClass;
                   if (spot && typeof spot === "object") {
                     return (
                       <Fragment key={col.facultyId}>
@@ -536,18 +750,13 @@ export function EncodeClient({
                         >
                           {spot.room}
                         </td>
-                        <td className={"min-w-[11rem] border border-zinc-200 px-1 py-1 " + dimClass}>
-                          {entry}
-                        </td>
+                        <td className={entryCellClass}>{entry}</td>
                       </Fragment>
                     );
                   }
                   if (spot === "covered") {
                     return (
-                      <td
-                        key={`${col.facultyId}-e`}
-                        className={"min-w-[11rem] border border-zinc-200 px-1 py-1 " + dimClass}
-                      >
+                      <td key={`${col.facultyId}-e`} className={entryCellClass}>
                         {entry}
                       </td>
                     );
@@ -591,7 +800,10 @@ export function EncodeClient({
           </span>
         ) : null}
         {message ? (
-          <span className={"text-sm " + (message.ok ? "text-green-700" : "text-red-700")}>
+          <span
+            role={message.ok ? "status" : "alert"}
+            className={"text-sm " + (message.ok ? "text-green-700" : "text-red-700")}
+          >
             {message.text}
           </span>
         ) : null}
@@ -648,31 +860,53 @@ function EntryControl({
   value,
   locked,
   invalid,
+  checked,
+  onToggleCheck,
+  setStatus,
   update,
 }: {
   cell: EncodeCell;
   value: CellValue | undefined;
   locked: boolean;
   invalid: boolean;
+  checked: boolean;
+  onToggleCheck: (shiftKey: boolean) => void;
+  setStatus: (status: AttendanceStatus) => void;
   update: (key: string, patch: Partial<CellValue>) => void;
 }) {
   const status = value?.status ?? "unset";
   return (
     <div className="flex flex-col gap-1">
-      <select
-        className={
-          "input h-8 w-auto px-1 py-0.5 text-[11px] " +
-          (invalid ? "border-red-500 bg-red-50" : "")
-        }
-        value={status}
-        disabled={locked}
-        aria-label={`Attendance status for ${cell.key}`}
-        onChange={(e) => update(cell.key, { status: e.target.value as AttendanceStatus })}
-      >
-        <option value="unset">Select Entry</option>
-        <option value="present">Present</option>
-        <option value="absent">Absent</option>
-      </select>
+      <div className="flex items-center gap-1.5">
+        <input
+          type="checkbox"
+          className="h-3.5 w-3.5 shrink-0 accent-blue-600"
+          checked={checked}
+          disabled={locked}
+          aria-label={`Select hour ${cell.key}`}
+          title="Select this hour (Shift-click for a range)"
+          // The checkbox is fully controlled by `selected`; the native change is
+          // ignored and the click (with its shiftKey) drives the selection. Not
+          // calling preventDefault lets React reconcile the controlled `checked`
+          // prop reliably after every click.
+          onChange={() => undefined}
+          onClick={(e) => onToggleCheck(e.shiftKey)}
+        />
+        <select
+          className={
+            "input h-8 w-auto flex-1 px-1 py-0.5 text-[11px] " +
+            (invalid ? "border-red-500 bg-red-50" : "")
+          }
+          value={status}
+          disabled={locked}
+          aria-label={`Attendance status for ${cell.key}`}
+          onChange={(e) => setStatus(e.target.value as AttendanceStatus)}
+        >
+          <option value="unset">Select Entry</option>
+          <option value="present">Present</option>
+          <option value="absent">Absent</option>
+        </select>
+      </div>
       {status === "absent" ? (
         <input
           type="text"

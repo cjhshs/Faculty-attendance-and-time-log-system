@@ -85,13 +85,14 @@ export default async function UsersPage() {
       <section className="card overflow-auto">
         <h2 className="mb-3 section-title">Users ({users.length})</h2>
         <table className="data-table">
+          <caption className="visually-hidden">Users</caption>
           <thead>
             <tr>
-              <th>Name</th>
-              <th>Username</th>
-              <th>Roles</th>
-              <th>Status</th>
-              {canManageUsers ? <th>Actions</th> : null}
+              <th scope="col">Name</th>
+              <th scope="col">Username</th>
+              <th scope="col">Roles</th>
+              <th scope="col">Status</th>
+              {canManageUsers ? <th scope="col" aria-label="Actions"></th> : null}
             </tr>
           </thead>
           <tbody>
@@ -102,9 +103,9 @@ export default async function UsersPage() {
                 <td>{u.userRoles.map((ur) => ur.role.name).join(", ")}</td>
                 <td>
                   {u.active ? (
-                    <span className="badge bg-green-100 text-green-800">Active</span>
+                    <span className="badge badge-success">Active</span>
                   ) : (
-                    <span className="badge bg-zinc-200 text-zinc-600">Inactive</span>
+                    <span className="badge badge-neutral">Inactive</span>
                   )}
                 </td>
                 {canManageUsers ? (

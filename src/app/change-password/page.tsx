@@ -18,9 +18,9 @@ export default async function ChangePasswordPage() {
           <div className="flex flex-col items-center gap-3 border-b border-line px-6 py-6 text-center">
             <div className="flex items-center justify-center gap-5">
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={logo1.src} alt="" className="h-14 w-14 shrink-0 object-contain" />
+              <img src={logo1.src} alt="School logo" className="h-14 w-14 shrink-0 object-contain" />
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={logo2.src} alt="" className="h-14 w-14 shrink-0 object-contain" />
+              <img src={logo2.src} alt="College logo" className="h-14 w-14 shrink-0 object-contain" />
             </div>
             <h1 className="text-[17px] font-bold uppercase leading-tight tracking-wide text-navy">
               Ramon Magsaysay Memorial Colleges

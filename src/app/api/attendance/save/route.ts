@@ -7,6 +7,7 @@ import { parseISODate, todayUtc, hoursOfRange } from "@/lib/dates";
 import { parseTerm, termWhere, isValidTerm } from "@/lib/terms";
 import { attendanceGenerationGate, getAcademicPeriod } from "@/lib/academic-period";
 import {
+  DEFAULT_ABSENCE_REASON,
   isAttendanceStatus,
   presentFromStatus,
   validateAttendanceReason,
@@ -137,11 +138,19 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: "Invalid attendance status." }, { status: 400 });
     }
     const statusTouched = record.status !== undefined;
+    // A real absence always carries a reason. When the caller marked the hour
+    // absent but left the reason blank, fall back to the documented default so
+    // the stored value, validation and reports all agree. Present/unencoded
+    // hours are never given the default.
+    const reason =
+      statusTouched && record.status === "absent" && !String(record.reason ?? "").trim()
+        ? DEFAULT_ABSENCE_REASON
+        : record.reason;
     if (statusTouched) {
-      const checked = validateAttendanceReason(record.status!, record.reason);
+      const checked = validateAttendanceReason(record.status!, reason);
       if (!checked.ok) return NextResponse.json({ error: checked.message }, { status: 400 });
     }
-    valid.push({ ...record, courseId: slot.courseId, statusTouched });
+    valid.push({ ...record, reason, courseId: slot.courseId, statusTouched });
   }
 
   if (valid.length === 0) {

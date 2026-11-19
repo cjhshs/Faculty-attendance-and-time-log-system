@@ -6,8 +6,14 @@ import { parseTerm, isValidTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
 import { prisma } from "@/lib/prisma";
 import { normalizeCourseCode } from "@/lib/college-catalog";
+import { formatISODate } from "@/lib/dates";
 import { describeDuplicateImport, importChecksum } from "@/lib/import-checksum";
 import { getAcademicPeriod, saveAcademicPeriod } from "@/lib/academic-period";
+import {
+  describeImportRange,
+  parseImportRange,
+  resolveImportRange,
+} from "@/lib/import-range";
 
 export const maxDuration = 300;
 
@@ -36,7 +42,11 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
-  const college = String(form.get("college") ?? "").trim();
+  const rangeInput = parseImportRange(form);
+  if (!rangeInput.ok) {
+    return NextResponse.json({ error: rangeInput.error }, { status: 400 });
+  }
+  const college = String(form.get("college") ?? "CET").trim() || "CET";
   const program = String(form.get("program") ?? "").trim();
   const confirmDuplicate = String(form.get("confirmDuplicate") ?? "") === "1";
   const reprocessOnly = String(form.get("reprocessOnly") ?? "") === "1";
@@ -83,6 +93,14 @@ export async function POST(request: Request) {
     // Register the explicitly chosen period if it does not exist yet. Dates stay
     // NULL because the import does not contain reviewed semester boundaries.
     const period = await getAcademicPeriod(target.schoolYear, target.semester);
+    const range = resolveImportRange(
+      rangeInput.input,
+      period,
+      `${target.schoolYear} · ${target.semester}`,
+    );
+    if (!range.ok) {
+      return NextResponse.json({ error: range.error }, { status: 400 });
+    }
     if (!period) {
       await saveAcademicPeriod({
         schoolYear: target.schoolYear,
@@ -116,6 +134,11 @@ export async function POST(request: Request) {
         checksum,
         facultyAssignments,
         reprocessOnly,
+        // Reprocess is schedule-only by design (its confirmation text promises
+        // no attendance records are written), so never pre-create rows there.
+        attendanceRange: !reprocessOnly && range.resolved.start && range.resolved.end
+          ? { start: range.resolved.start, end: range.resolved.end }
+          : null,
       },
       scope,
     );
@@ -136,11 +159,19 @@ export async function POST(request: Request) {
         reprocessOnly ? `, ${result.skippedNew} new slot(s) skipped` : ""
       }, ${result.ambiguousUnlinked} ambiguous instructor link(s) left unlinked.${
         result.batchId ? ` Batch #${result.batchId}.` : ""
-      }${mismatches ? ` Term mismatch warning: ${mismatches}` : ""}`,
+      } ${describeImportRange(range.resolved)}: ${result.attendanceRowsCreated} unencoded attendance row(s) pre-created across ${result.attendanceDates} date(s).${
+        mismatches ? ` Term mismatch warning: ${mismatches}` : ""
+      }`,
     );
     return NextResponse.json({
       result,
       termWarning: mismatches || null,
+      range: {
+        mode: range.resolved.mode,
+        warning: range.resolved.warning,
+        startDate: range.resolved.start ? formatISODate(range.resolved.start) : null,
+        endDate: range.resolved.end ? formatISODate(range.resolved.end) : null,
+      },
     });
   } catch (error) {
     if (error instanceof AmbiguousFacultyError) {

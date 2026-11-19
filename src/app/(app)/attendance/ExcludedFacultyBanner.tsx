@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirm } from "../confirm";
 
 export function ExcludedFacultyBanner({
   sheetKey,
@@ -12,6 +13,7 @@ export function ExcludedFacultyBanner({
 }) {
   const router = useRouter();
   const [restoringId, setRestoringId] = useState<number | null>(null);
+  const { alert, dialog } = useConfirm();
 
   if (excludedFaculty.length === 0) return null;
 
@@ -25,12 +27,20 @@ export function ExcludedFacultyBanner({
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
-        alert(data.error ?? "Failed to restore faculty member.");
+        await alert({
+          title: "Could not restore faculty member",
+          message: data.error ?? "Failed to restore faculty member.",
+          tone: "danger",
+        });
         return;
       }
       router.refresh();
     } catch (err) {
-      alert(err instanceof Error ? err.message : "Failed to restore faculty member.");
+      await alert({
+        title: "Could not restore faculty member",
+        message: err instanceof Error ? err.message : "Failed to restore faculty member.",
+        tone: "danger",
+      });
     } finally {
       setRestoringId(null);
     }
@@ -38,6 +48,7 @@ export function ExcludedFacultyBanner({
 
   return (
     <div className="no-print flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs text-slate-700">
+      {dialog}
       <span className="font-medium text-slate-600">
         Removed / Excluded from this sheet ({excludedFaculty.length}):
       </span>

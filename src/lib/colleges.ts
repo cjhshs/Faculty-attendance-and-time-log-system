@@ -129,18 +129,12 @@ export async function resolveScope(scope: ScopeQuery): Promise<ScopeResolution> 
   });
 
   const collegeEntry = courses.find((c) => c.college)?.college ?? null;
-  const collegeCode =
-    college === UNASSIGNED_COLLEGE_VALUE ? UNASSIGNED_COLLEGE_VALUE : college || collegeEntry?.code || null;
-  const collegeName =
-    college === UNASSIGNED_COLLEGE_VALUE ? "Unassigned programs" : collegeEntry?.name ?? null;
+  const collegeCode = "CET";
+  const collegeName = collegeEntry?.name ?? "College of Engineering and Technology";
 
   const label = program
     ? `${program}${collegeEntry ? ` — ${collegeEntry.name}` : ""}`
-    : college === UNASSIGNED_COLLEGE_VALUE
-      ? `Unassigned programs (${courses.length})`
-      : collegeCode && collegeName
-        ? `${collegeCode} — ${collegeName} (${courses.length} program${courses.length === 1 ? "" : "s"})`
-        : `All colleges (${courses.length} program${courses.length === 1 ? "" : "s"})`;
+    : `${collegeCode} — ${collegeName} (${courses.length} program${courses.length === 1 ? "" : "s"})`;
 
   return {
     collegeCode,

@@ -112,7 +112,7 @@ export default async function PrintPage({
 
   // `department` is the department-first scope. `college` is accepted for old
   // bookmarks and is treated as the same department selection.
-  const department = (params.department ?? params.college ?? "").trim();
+  const department = (params.department ?? params.college ?? "CET").trim() || "CET";
 
   const [allCourses, collegeOptions, settings, activeTerm, periods] = await Promise.all([
     getCourses(),

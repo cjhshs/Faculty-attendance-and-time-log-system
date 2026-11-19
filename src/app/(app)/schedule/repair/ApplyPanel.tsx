@@ -1,7 +1,8 @@
 "use client";
 
-import { useActionState, useEffect } from "react";
+import { useActionState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useConfirm } from "../../confirm";
 import {
   applyRepairSource,
   revertRepairSource,
@@ -26,6 +27,8 @@ export function ApplyPanel({
   const router = useRouter();
   const [applyState, applyAction, applying] = useActionState(applyRepairSource, applyInitial);
   const [revertState, revertAction, reverting] = useActionState(revertRepairSource, revertInitial);
+  const { confirm, dialog } = useConfirm();
+  const revertForm = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
     if (applyState.ok || revertState.ok) router.refresh();
@@ -33,6 +36,7 @@ export function ApplyPanel({
 
   return (
     <div className="card space-y-4">
+      {dialog}
       <h2 className="section-title mb-0">Apply the repaired schedule</h2>
       <p className="text-sm text-muted">
         Approved corrections are written into the selected semester. Existing schedules are updated,
@@ -62,20 +66,32 @@ export function ApplyPanel({
         </button>
       </form>
       {applyState.message ? (
-        <div className={"alert " + (applyState.ok ? "alert-success" : "alert-error")}>{applyState.message}</div>
+        <div
+          role={applyState.ok ? "status" : "alert"}
+          className={"alert " + (applyState.ok ? "alert-success" : "alert-error")}
+        >
+          {applyState.message}
+        </div>
       ) : null}
 
       {applied ? (
         <div className="border-t border-line pt-4">
-          <form action={revertAction} className="flex items-center gap-3">
+          <form ref={revertForm} action={revertAction} className="flex items-center gap-3">
             <input type="hidden" name="sourceId" value={sourceId} />
             <button
               type="submit"
               className="btn btn-danger"
               disabled={reverting}
-              onClick={(e) => {
-                if (!window.confirm("Revert removes the schedules this analysis wrote. Attendance is kept. Continue?"))
-                  e.preventDefault();
+              onClick={async (e) => {
+                e.preventDefault();
+                const ok = await confirm({
+                  title: "Revert applied schedules?",
+                  message:
+                    "Revert removes the schedules this analysis wrote. Attendance is kept. Continue?",
+                  confirmLabel: "Revert",
+                  tone: "danger",
+                });
+                if (ok) revertForm.current?.requestSubmit();
               }}
             >
               {reverting ? "Reverting…" : "Revert applied schedules"}
@@ -83,7 +99,10 @@ export function ApplyPanel({
             <span className="text-xs text-muted">Removes only the slots this analysis created.</span>
           </form>
           {revertState.message ? (
-            <div className={"alert mt-2 " + (revertState.ok ? "alert-success" : "alert-error")}>
+            <div
+              role={revertState.ok ? "status" : "alert"}
+              className={"alert mt-2 " + (revertState.ok ? "alert-success" : "alert-error")}
+            >
               {revertState.message}
             </div>
           ) : null}

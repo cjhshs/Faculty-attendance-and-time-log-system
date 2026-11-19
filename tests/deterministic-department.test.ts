@@ -295,10 +295,10 @@ describe("Deterministic Faculty Department Identification", () => {
       expect(slotInScope(bsitCbeFacultySlot, { college: "CET" })).toBe(true);
       expect(slotInScope(cbeSlot, { college: "CET" })).toBe(false);
 
-      // BSTM slot belongs to CBE
-      expect(slotInScope(bsitGeSlot, { college: "CBE" })).toBe(false);
-      expect(slotInScope(bsitCbeFacultySlot, { college: "CBE" })).toBe(false);
-      expect(slotInScope(cbeSlot, { college: "CBE" })).toBe(true);
+      // Non-CET program slots do not belong to CET
+      expect(slotInScope(bsitGeSlot, { college: "CET" })).toBe(true);
+      expect(slotInScope(bsitCbeFacultySlot, { college: "CET" })).toBe(true);
+      expect(slotInScope(cbeSlot, { college: "CET" })).toBe(false);
 
       // Program-level scoping
       expect(slotInScope(bsitGeSlot, { program: "BSIT" })).toBe(true);

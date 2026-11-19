@@ -238,6 +238,7 @@ export default async function SettingsPage() {
 
         <div className="mt-5 overflow-x-auto">
           <table className="data-table min-w-[42rem]">
+            <caption className="visually-hidden">Academic periods</caption>
             <thead>
               <tr>
                 <th scope="col">School year</th>
@@ -259,7 +260,7 @@ export default async function SettingsPage() {
                     <td className="whitespace-nowrap font-medium">
                       {p.schoolYear}
                       {isActive ? (
-                        <span className="ml-2 badge bg-green-100 text-green-800">Active</span>
+                        <span className="ml-2 badge badge-success">Active</span>
                       ) : null}
                     </td>
                     <td className="whitespace-nowrap">{p.semester}</td>
@@ -267,7 +268,7 @@ export default async function SettingsPage() {
                       {p.startDate && p.endDate ? (
                         `${formatISODate(p.startDate)} → ${formatISODate(p.endDate)}`
                       ) : (
-                        <span className="badge bg-amber-100 text-amber-800">Not configured</span>
+                        <span className="badge badge-warn">Not configured</span>
                       )}
                     </td>
                     <td className="whitespace-nowrap text-xs">

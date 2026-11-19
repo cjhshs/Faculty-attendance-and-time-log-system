@@ -30,40 +30,39 @@ function realPlan(): ImportPlan {
 const plan = realPlan();
 const mapping = new Map(plan.programMapping.map((m) => [m.code, m]));
 
-describe("A. the official catalog", () => {
-  it("lists all 41 program codes exactly once", () => {
-    expect(PROGRAM_CATALOG).toHaveLength(41);
-    expect(new Set(PROGRAM_CATALOG.map((p) => p.code)).size).toBe(41);
+describe("A. the official CET catalog", () => {
+  it("lists all 5 CET program codes exactly once", () => {
+    expect(PROGRAM_CATALOG).toHaveLength(5);
+    expect(new Set(PROGRAM_CATALOG.map((p) => p.code)).size).toBe(5);
     for (const program of PROGRAM_CATALOG) {
       expect(program.code).toBe(normalizeCourseCode(program.code));
       expect(program.name.length).toBeGreaterThan(0);
+      expect(program.college).toBe("CET");
     }
   });
 
-  it("splits into 27 official, 9 additional and 5 unassigned programs", () => {
-    expect(PROGRAM_CATALOG.filter((p) => p.official)).toHaveLength(27);
-    expect(PROGRAM_CATALOG.filter((p) => !p.official && p.college)).toHaveLength(9);
-    expect(PROGRAM_CATALOG.filter((p) => p.college === null)).toHaveLength(5);
+  it("all 5 programs are official CET programs", () => {
+    expect(PROGRAM_CATALOG.filter((p) => p.official)).toHaveLength(5);
+    expect(PROGRAM_CATALOG.filter((p) => p.college === "CET")).toHaveLength(5);
   });
 
-  it("only uses colleges defined in COLLEGE_DEFS, in a fixed order", () => {
-    const valid = new Set(COLLEGE_DEFS.map((c) => c.code));
-    for (const program of PROGRAM_CATALOG) {
-      if (program.college) expect(valid.has(program.college)).toBe(true);
-    }
-    expect(COLLEGE_DEFS.map((c) => c.sortOrder)).toEqual(
-      [...COLLEGE_DEFS.map((c) => c.sortOrder)].sort((a, b) => a - b),
-    );
+  it("only uses CET defined in COLLEGE_DEFS", () => {
+    expect(COLLEGE_DEFS).toHaveLength(1);
+    expect(COLLEGE_DEFS[0].code).toBe("CET");
+    expect(COLLEGE_DEFS[0].name).toBe("College of Engineering and Technology");
   });
 
-  it("keeps every program reachable from its college", () => {
+  it("keeps every program reachable from CET", () => {
     const total = COLLEGE_DEFS.reduce(
       (sum, college) => sum + programsForCollege(college.code).length,
       0,
     );
-    expect(total).toBe(36);
+    expect(total).toBe(5);
     expect(programsForCollege("CET").map((p) => p.code)).toContain("BSCS");
-    expect(collegeNameFor("COAHS")).toBe("College of Allied Health Sciences");
+    expect(programsForCollege("CET").map((p) => p.code)).toContain("BSIT");
+    expect(programsForCollege("CET").map((p) => p.code)).toContain("BSCE-SE");
+    expect(collegeNameFor("CET")).toBe("College of Engineering and Technology");
+    expect(collegeNameFor("COAHS")).toBeNull();
   });
 });
 
@@ -72,31 +71,30 @@ describe("B. course code normalization", () => {
     expect(normalizeCourseCode("  bsed -   english ")).toBe("BSED - ENGLISH");
     expect(normalizeCourseCode(null)).toBe("");
     expect(programForCode("bsit")?.code).toBe("BSIT");
-    expect(programForCode("  bsba - fm  ")?.code).toBe("BSBA - FM");
+    expect(programForCode("  bscs  ")?.code).toBe("BSCS");
   });
 
-  it("returns null for codes that are not in the catalog", () => {
+  it("returns null for codes that are not in the CET catalog", () => {
     expect(programForCode("XXXX")).toBeNull();
     expect(programForCode("")).toBeNull();
+    expect(programForCode("BSBA - FM")).toBeNull();
   });
 });
 
-describe("C. mapping the consolidated workbook", () => {
-  it("finds 41 programs and knows every one of them", () => {
+describe("C. mapping the consolidated workbook to CET scope", () => {
+  it("finds 41 programs in the multi-department file", () => {
     expect(plan.summary.programsInFile).toBe(41);
-    expect(plan.summary.programsUnknown).toBe(0);
-    expect(plan.programMapping.every((m) => m.inCatalog)).toBe(true);
   });
 
-  it("maps 36 programs to a college and leaves exactly 5 for review", () => {
-    expect(plan.summary.programsMapped).toBe(36);
-    expect(plan.summary.programsUnassigned).toBe(5);
+  it("maps the 5 CET programs to CET and identifies 36 non-CET programs", () => {
+    expect(plan.summary.programsMapped).toBe(5);
+    expect(plan.summary.programsUnknown).toBe(36);
     expect(
       plan.programMapping
-        .filter((m) => !m.collegeCode)
+        .filter((m) => m.collegeCode === "CET")
         .map((m) => m.code)
         .sort(),
-    ).toEqual(["BAEL", "BAP", "BPA", "BPEA", "BSESS"]);
+    ).toEqual(["ACT", "BLIS", "BSCE-SE", "BSCS", "BSIT"]);
   });
 
   it("accounts for every row and slot in the file", () => {
@@ -107,16 +105,11 @@ describe("C. mapping the consolidated workbook", () => {
     expect(plan.summary.dataRows).toBe(1985);
   });
 
-  it("orders programs by college, unassigned last", () => {
+  it("orders programs with CET first, non-CET last", () => {
     const last = plan.programMapping.at(-1);
     expect(last?.collegeCode).toBeNull();
     const firstCodes = plan.programMapping.slice(0, 5).map((m) => m.collegeCode);
     expect(new Set(firstCodes)).toEqual(new Set(["CET"]));
-  });
-
-  it("counts both reused course numbers in their own programs", () => {
-    expect(mapping.get("BCAED")?.rows).toBeGreaterThan(0);
-    expect(mapping.get("BECED")?.rows).toBeGreaterThan(0);
   });
 });
 
@@ -128,26 +121,24 @@ describe("D. import scope", () => {
   });
 
   it("narrows to one program regardless of code formatting", () => {
-    expect(slotInScope("BSED - ENGLISH", { program: "bsed -  english" })).toBe(true);
-    expect(slotInScope("BSED - SCIENCE", { program: "BSED - ENGLISH" })).toBe(false);
+    expect(slotInScope("BSIT", { program: "bsit" })).toBe(true);
+    expect(slotInScope("BSCS", { program: "BSIT" })).toBe(false);
   });
 
-  it("narrows to a college using the catalog", () => {
+  it("narrows to CET using the catalog", () => {
     expect(slotInScope("BSCS", { college: "CET" })).toBe(true);
     expect(slotInScope("BSN", { college: "CET" })).toBe(false);
-    expect(slotInScope("BAP", { college: UNASSIGNED_COLLEGE_VALUE })).toBe(true);
+    expect(slotInScope("BSN", { college: UNASSIGNED_COLLEGE_VALUE })).toBe(true);
     expect(slotInScope("BSCS", { college: UNASSIGNED_COLLEGE_VALUE })).toBe(false);
   });
 
   it("prefers the database assignment over the catalog", () => {
     const scope = {
-      college: "CBE",
-      collegeByCode: { BSCS: "CBE", BSN: null } as Record<string, string | null>,
+      college: "CET",
+      collegeByCode: { BSCS: "CET", BSN: null } as Record<string, string | null>,
     };
     expect(slotInScope("BSCS", scope)).toBe(true);
     expect(slotInScope("BSN", scope)).toBe(false);
-    expect(slotInScope("BSN", { ...scope, college: UNASSIGNED_COLLEGE_VALUE })).toBe(true);
-    expect(slotInScope("BSCR", { ...scope })).toBe(false);
   });
 
   it("treats a code the catalog does not know as unassigned", () => {

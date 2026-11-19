@@ -1,8 +1,21 @@
 "use client";
 
 import { useState } from "react";
+import { useConfirm } from "../../confirm";
 import type { ImportPlan, CommitResult } from "@/lib/import";
 import { WEEKDAY_SHORT } from "@/lib/dates";
+import {
+  IMPORT_RANGE_OPTIONS,
+  type ImportRangeMode,
+} from "@/lib/import-range-shared";
+
+type PreviewRange = {
+  mode: ImportRangeMode;
+  startDate: string | null;
+  endDate: string | null;
+  warning: string | null;
+  coverage: string;
+};
 
 type PeriodOption = {
   schoolYear: string;
@@ -53,7 +66,7 @@ export function ImportClient({
   const [file, setFile] = useState<File | null>(null);
   const [schoolYear, setSchoolYear] = useState(defaultSchoolYear);
   const [semester, setSemester] = useState(defaultSemester);
-  const [scopeCollege, setScopeCollege] = useState("");
+  const [scopeCollege, setScopeCollege] = useState("CET");
   const [scopeProgram, setScopeProgram] = useState("");
   const [plan, setPlan] = useState<ImportPlan | null>(null);
   const [result, setResult] = useState<CommitResult | null>(null);
@@ -62,10 +75,17 @@ export function ImportClient({
   const [duplicateImport, setDuplicateImport] = useState<DuplicateImport | null>(null);
   const [termWarning, setTermWarning] = useState<string | null>(null);
   const [previewPeriod, setPreviewPeriod] = useState<PeriodOption | null>(null);
+  const [previewRange, setPreviewRange] = useState<PreviewRange | null>(null);
+  // Semester (default) preserves the existing behaviour. Custom Range reveals
+  // the two date inputs and is validated before either preview or commit.
+  const [rangeMode, setRangeMode] = useState<ImportRangeMode>("semester");
+  const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   // Explicit administrator choices for duplicate roster names, keyed by the
   // normalized instructor name from the preview. Empty until a human chooses.
   const [facultyAssignments, setFacultyAssignments] = useState<Record<string, number>>({});
   const [reprocessOnly, setReprocessOnly] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   function resetPreview() {
     setPlan(null);
@@ -74,7 +94,28 @@ export function ImportClient({
     setDuplicateImport(null);
     setTermWarning(null);
     setPreviewPeriod(null);
+    setPreviewRange(null);
     setFacultyAssignments({});
+  }
+
+  // Client-side mirror of the server validator. It gives an immediate, clear
+  // message; the API repeats every check so a crafted request cannot bypass it.
+  function rangeError(): string | null {
+    if (rangeMode !== "custom") return null;
+    if (!startDate) return "Start Date is required for a Custom Range.";
+    if (!endDate) return "End Date is required for a Custom Range.";
+    if (endDate < startDate) return "End Date cannot be earlier than Start Date.";
+    const period = periods.find(
+      (p) => p.schoolYear.trim() === schoolYear.trim() && p.semester === semester,
+    );
+    if (period?.startDate && period.endDate) {
+      if (startDate < period.startDate || endDate > period.endDate) {
+        return `The selected range (${startDate} to ${endDate}) is outside the configured semester (${period.startDate} to ${period.endDate}). Choose dates inside the semester.`;
+      }
+    } else if (!period?.startDate || !period?.endDate) {
+      return `${schoolYear.trim() || "—"} · ${semester} has no reviewed semester dates. Set them on Settings before importing a Custom Range.`;
+    }
+    return null;
   }
 
   function buildBody(confirmDuplicate = false) {
@@ -82,6 +123,11 @@ export function ImportClient({
     if (file) body.append("file", file);
     body.append("schoolYear", schoolYear);
     body.append("semester", semester);
+    body.append("rangeMode", rangeMode);
+    if (rangeMode === "custom") {
+      body.append("startDate", startDate);
+      body.append("endDate", endDate);
+    }
     if (scopeCollege) body.append("college", scopeCollege);
     if (scopeProgram) body.append("program", scopeProgram);
     if (confirmDuplicate) body.append("confirmDuplicate", "1");
@@ -98,9 +144,14 @@ export function ImportClient({
       setError("Enter the target academic year (for example 2027-2028).");
       return;
     }
+    const rangeProblem = rangeError();
+    if (rangeProblem) {
+      setError(rangeProblem);
+      return;
+    }
     setLoading(true);
     resetPreview();
-    setScopeCollege("");
+    setScopeCollege("CET");
     setScopeProgram("");
     try {
       const res = await fetch("/api/schedule/preview", { method: "POST", body: buildBody() });
@@ -114,6 +165,7 @@ export function ImportClient({
       setPlan(data.plan);
       setDuplicateImport(data.duplicateImport ?? null);
       setPreviewPeriod(data.period ?? null);
+      setPreviewRange(data.range ?? null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Preview failed.");
     } finally {
@@ -125,10 +177,22 @@ export function ImportClient({
     if (!file) return;
     const termLabel = `${schoolYear.trim()} ${semester}`;
     const scopeLabel = scopeProgram || scopeCollege || "all colleges";
+    const rangeProblem = rangeError();
+    if (rangeProblem) {
+      setError(rangeProblem);
+      return;
+    }
+    const rangeLabel =
+      rangeMode === "custom"
+        ? ` Custom Range ${startDate} to ${endDate}`
+        : " the semester default range";
     if (duplicateImport && !forceDuplicate) {
-      const ok = window.confirm(
-        `${duplicateImport.message ?? "This exact file was already imported into this academic period."}\n\nImport it again into ${termLabel}? Existing attendance is not affected, but the same schedule records will be written again.`,
-      );
+      const ok = await confirm({
+        title: "Import this file again?",
+        message: `${duplicateImport.message ?? "This exact file was already imported into this academic period."} Import it again into ${termLabel}? Existing attendance is not affected, but the same schedule records will be written again.`,
+        confirmLabel: "Import again",
+        tone: "danger",
+      });
       if (!ok) return;
       forceDuplicate = true;
     }
@@ -150,11 +214,13 @@ export function ImportClient({
       return;
     }
     if (
-      !window.confirm(
-        reprocessOnly
+      !(await confirm({
+        title: reprocessOnly ? "Reprocess schedules?" : "Import schedules?",
+        message: reprocessOnly
           ? `Reprocess ${scopeLabel} from this file into ${termLabel}? Only meetings that already exist in this semester are updated. No new slots and no attendance records are written.`
-          : `Import ${scopeLabel} from this file into ${termLabel}? Existing schedules in that semester are updated, never deleted. Attendance is not affected. Conflicts are always checked across every department in the file.`,
-      )
+          : `Import ${scopeLabel} from this file into ${termLabel} for${rangeLabel}? Existing schedules in that semester are updated, never deleted. Blank attendance rows will be created only inside that range; already encoded attendance is never changed. Conflicts are always checked across every department in the file.`,
+        confirmLabel: reprocessOnly ? "Reprocess" : "Import",
+      }))
     )
       return;
     setLoading(true);
@@ -214,6 +280,7 @@ export function ImportClient({
 
   return (
     <div className="space-y-6">
+      {dialog}
       <div className="card space-y-4">
         <div>
           <label className="label" htmlFor="schedule-file">
@@ -278,6 +345,77 @@ export function ImportClient({
           </button>
         </div>
 
+        <div className="flex flex-wrap items-end gap-4 border-t border-line pt-4">
+          <div>
+            <label className="label" htmlFor="import-range">
+              Import range
+            </label>
+            <select
+              id="import-range"
+              className="select"
+              value={rangeMode}
+              onChange={(e) => {
+                const mode = e.target.value as ImportRangeMode;
+                setRangeMode(mode);
+                if (mode === "custom") {
+                  // Seed from the configured semester, never from a hardcoded date.
+                  const period = periods.find(
+                    (p) => p.schoolYear.trim() === schoolYear.trim() && p.semester === semester,
+                  );
+                  setStartDate(period?.startDate ?? "");
+                  setEndDate(period?.endDate ?? "");
+                }
+                resetPreview();
+              }}
+            >
+              {IMPORT_RANGE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          {rangeMode === "custom" ? (
+            <>
+              <div>
+                <label className="label req" htmlFor="import-start">
+                  Start Date
+                </label>
+                <input
+                  id="import-start"
+                  type="date"
+                  className="input"
+                  value={startDate}
+                  onChange={(e) => {
+                    setStartDate(e.target.value);
+                    resetPreview();
+                  }}
+                />
+              </div>
+              <div>
+                <label className="label req" htmlFor="import-end">
+                  End Date
+                </label>
+                <input
+                  id="import-end"
+                  type="date"
+                  className="input"
+                  value={endDate}
+                  onChange={(e) => {
+                    setEndDate(e.target.value);
+                    resetPreview();
+                  }}
+                />
+              </div>
+            </>
+          ) : null}
+          {rangeError() ? (
+            <p className="w-full text-xs text-red-600" role="alert">
+              {rangeError()}
+            </p>
+          ) : null}
+        </div>
+
         <p className="text-xs text-muted">
           Columns are matched by header name. Slots are imported into{" "}
           <strong>
@@ -314,6 +452,26 @@ export function ImportClient({
             </p>
           ) : null}
         </div>
+
+        {previewRange ? (
+          <div className="rounded-md border border-line bg-slate-50 px-3 py-2 text-xs">
+            <p>
+              <strong>Import range:</strong>{" "}
+              {previewRange.startDate && previewRange.endDate
+                ? `${previewRange.mode === "custom" ? "Custom Range" : "Semester (default)"}: ${previewRange.startDate} to ${previewRange.endDate}`
+                : "Semester default (no reviewed semester dates)"}
+            </p>
+            <p className="mt-1 text-muted">{previewRange.coverage}</p>
+            {previewRange.warning ? (
+              <p className="mt-1 text-amber-800">{previewRange.warning}</p>
+            ) : (
+              <p className="mt-1 text-muted">
+                Blank attendance rows will be created only inside this range. Existing manually
+                encoded attendance is never overwritten.
+              </p>
+            )}
+          </div>
+        ) : null}
       </div>
 
       {duplicateImport ? (
@@ -351,6 +509,9 @@ export function ImportClient({
             ? ` ${result.ambiguousUnlinked} instructor link(s) were left unlinked because the name matches more than one faculty record; resolve them and import again.`
             : ""}
           {result.batchId ? ` Recorded as import batch #${result.batchId}.` : ""}
+          {result.attendanceRowsCreated > 0
+            ? ` ${result.attendanceRowsCreated} blank attendance row(s) were created across ${result.attendanceDates} date(s) in the selected range; encoded attendance was left untouched.`
+            : " No attendance rows were created."}
           {result.errors > 0 ? ` ${result.errors} row(s) were skipped.` : ""}
         </div>
       ) : null}
@@ -395,6 +556,7 @@ export function ImportClient({
         ) : (
           <div className="max-h-72 overflow-auto">
             <table className="data-table min-w-[38rem]">
+              <caption className="visually-hidden">Import history</caption>
               <thead>
                 <tr>
                   <th scope="col">Imported</th>
@@ -555,32 +717,12 @@ function PlanView({
         </div>
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="label" htmlFor="import-college">
+            <label className="label">
               College / Department
             </label>
-            <select
-              id="import-college"
-              className="input"
-              value={scopeCollege}
-              onChange={(e) => onCollegeChange(e.target.value)}
-            >
-              <option value="">
-                All colleges ({plan.programMapping.length} program
-                {plan.programMapping.length === 1 ? "" : "s"})
-              </option>
-              {collegeCodes.map((code) => (
-                <option key={code} value={code}>
-                  {code} — {collegeNames.get(code)} (
-                  {plan.programMapping.filter((m) => m.collegeCode === code).length})
-                </option>
-              ))}
-              {hasUnassigned ? (
-                <option value="unassigned">
-                  Unassigned programs (
-                  {plan.programMapping.filter((m) => !m.collegeCode).length})
-                </option>
-              ) : null}
-            </select>
+            <div className="rounded-md border border-line bg-slate-100 px-3 py-2 text-sm font-semibold text-navy">
+              CET — College of Engineering and Technology
+            </div>
           </div>
           <div>
             <label className="label" htmlFor="import-scope-program">
@@ -728,6 +870,7 @@ function PlanView({
         </p>
         <div className="max-h-80 overflow-auto">
           <table className="data-table">
+            <caption className="visually-hidden">Program mapping</caption>
             <thead>
               <tr>
                 <th scope="col">Course code</th>
@@ -749,13 +892,13 @@ function PlanView({
                   <td className="text-center">{m.slots}</td>
                   <td>
                     {!m.inCatalog ? (
-                      <span className="badge bg-red-100 text-red-800">Unknown code</span>
+                      <span className="badge badge-danger">Unknown code</span>
                     ) : m.collegeCode === null ? (
-                      <span className="badge bg-amber-100 text-amber-800">Needs review</span>
+                      <span className="badge badge-warn">Needs review</span>
                     ) : m.official ? (
-                      <span className="badge bg-green-100 text-green-800">Official</span>
+                      <span className="badge badge-success">Official</span>
                     ) : (
-                      <span className="badge bg-blue-100 text-blue-800">Additional program</span>
+                      <span className="badge badge-info">Additional program</span>
                     )}
                   </td>
                   <td>
@@ -780,14 +923,13 @@ function PlanView({
       {plan.facultyReview.length ? (
         <Section title={`Instructor review (${plan.facultyReview.length})`} tone="amber">
           <p className="mb-2 text-xs text-muted">
-            These instructor names could not be matched safely to one registered faculty member. No
-            department was guessed from the course code, subject or student program. Unknown names
-            may be new hires or typos; ambiguous names match more than one roster row and must be
-            resolved here; a roster match without a department must be assigned on the Departments
-            page before it appears in a department attendance sheet.
+            These instructor names could not be matched safely to one registered faculty member.
+            Unknown names may be new hires or typos; ambiguous names match more than one roster row
+            and must be resolved here. All imported faculty are assigned to CET.
           </p>
           <div className="max-h-80 overflow-auto">
             <table className="data-table">
+              <caption className="visually-hidden">Instructor review</caption>
               <thead>
                 <tr>
                   <th scope="col">Instructor in file</th>
@@ -804,11 +946,11 @@ function PlanView({
                     <td className="font-medium">{entry.name}</td>
                     <td>
                       {entry.kind === "unknown" ? (
-                        <span className="badge bg-red-100 text-red-800">Unknown instructor</span>
+                        <span className="badge badge-danger">Unknown instructor</span>
                       ) : entry.kind === "ambiguous" ? (
-                        <span className="badge bg-red-100 text-red-800">Ambiguous name</span>
+                        <span className="badge badge-danger">Ambiguous name</span>
                       ) : (
-                        <span className="badge bg-amber-100 text-amber-800">No department</span>
+                        <span className="badge badge-warn">No department</span>
                       )}
                     </td>
                     <td className="text-center">{entry.rows.join(", ")}</td>
@@ -865,9 +1007,9 @@ function PlanView({
                         </span>
                       ) : (
                         <span className="text-xs text-muted">
-                          Assign a department on{" "}
-                          <a href="/departments" className="underline">
-                            Departments
+                          Manage faculty on{" "}
+                          <a href="/master" className="underline">
+                            Master Data
                           </a>
                           .
                         </span>
@@ -1033,6 +1175,7 @@ function PlanView({
       <Section title={`Parsed schedule slots (${plan.slots.length})`}>
         <div className="max-h-96 overflow-auto">
           <table className="data-table">
+            <caption className="visually-hidden">Parsed schedule slots</caption>
             <thead>
               <tr>
                 <th scope="col">Program</th>
@@ -1107,10 +1250,10 @@ function PlanView({
 }
 
 const SPAN_STATUS: Record<string, string> = {
-  new: "bg-green-100 text-green-800",
-  update: "bg-blue-100 text-blue-800",
-  unchanged: "bg-zinc-100 text-zinc-600",
-  error: "bg-red-100 text-red-800",
+  new: "badge-success",
+  update: "badge-info",
+  unchanged: "badge-neutral",
+  error: "badge-danger",
 };
 
 function Stat({

@@ -46,6 +46,25 @@ export function normalizeFacultyName(name: string | null | undefined): string {
     .toUpperCase();
 }
 
+// The single rule that decides whether two names refer to the same person. It
+// accepts the safe key match (case/space/comma variants such as
+// "SURNAME, First M." vs "Surname, First M.") OR the fully normalized match
+// (which additionally ignores periods and commas, so "Doe, Jane" and
+// "Doe Jane" collapse). The Excel parser (plan time), the import transaction
+// (commit time) and the review list all call this one function, so a name can
+// never be "known" while planning but "ambiguous" while writing.
+export function facultyNameMatches(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  const keyA = facultyNameKey(a);
+  const keyB = facultyNameKey(b);
+  if (keyA && keyA === keyB) return true;
+  const normA = normalizeFacultyName(a);
+  const normB = normalizeFacultyName(b);
+  return !!normA && normA === normB;
+}
+
 // Pure in-memory faculty department resolution using the normalized name.
 export function resolveFacultyDepartmentFromRoster<
   T extends {
@@ -79,11 +98,7 @@ export function resolveFacultyDepartmentFromRoster<
   const explicit = assignments[normalized] ?? assignments[facultyNameKey(instructorName)];
   if (explicit !== undefined) {
     const match = roster.find((f) => f.id === explicit);
-    if (
-      match &&
-      (normalizeFacultyName(match.fullName) === normalized ||
-        facultyNameKey(match.fullName) === facultyNameKey(instructorName))
-    ) {
+    if (match && facultyNameMatches(instructorName, match.fullName)) {
       if (match.departmentCode) {
         return {
           status: "MATCHED",
@@ -104,9 +119,7 @@ export function resolveFacultyDepartmentFromRoster<
   }
 
   const matches = roster.filter(
-    (f) =>
-      normalizeFacultyName(f.fullName) === normalized ||
-      facultyNameKey(f.fullName) === facultyNameKey(instructorName),
+    (f) => facultyNameMatches(instructorName, f.fullName),
   );
 
   if (matches.length === 0) {
@@ -168,9 +181,7 @@ export async function resolveFacultyDepartment(instructorName: string) {
   });
 
   const matches = allFaculty.filter(
-    (f) =>
-      normalizeFacultyName(f.fullName) === normalized ||
-      facultyNameKey(f.fullName) === facultyNameKey(instructorName),
+    (f) => facultyNameMatches(instructorName, f.fullName),
   );
 
   if (matches.length === 0) {
@@ -241,7 +252,7 @@ export function matchInstructor(
   if (!trimmed || trimmed.toUpperCase() === "TBA") return { kind: "tba" };
 
   const key = facultyNameKey(trimmed);
-  const exact = roster.filter((f) => facultyNameKey(f.fullName) === key);
+  const exact = roster.filter((f) => facultyNameMatches(trimmed, f.fullName));
   if (exact.length === 1) return { kind: "matched", faculty: exact[0], key };
   if (exact.length > 1) return { kind: "ambiguous", key, candidates: exact };
 

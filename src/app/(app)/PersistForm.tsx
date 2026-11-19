@@ -20,6 +20,7 @@ export function PersistForm({
   const ref = useRef<HTMLFormElement>(null);
   const timer = useRef<number | null>(null);
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
+  const [restored, setRestored] = useState(false);
 
   useEffect(() => {
     const form = ref.current;
@@ -84,6 +85,9 @@ export function PersistForm({
       window.dispatchEvent(
         new CustomEvent("fa:draft-restored", { detail: { values: saved, storageKey } }),
       );
+      // Tell the user their old filters came back, and offer a one-click reset
+      // (F19: restoring stale filters must not be silent).
+      setRestored(true);
     } catch {
       // Corrupt or disabled storage: keep the server-rendered defaults.
     }
@@ -149,6 +153,16 @@ export function PersistForm({
     };
   }, []);
 
+  function clearSaved() {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      // Storage disabled: nothing to clear.
+    }
+    // Reload the bare form so the server-rendered defaults apply again.
+    window.location.assign(window.location.pathname);
+  }
+
   return (
     <form
       ref={ref}
@@ -166,6 +180,14 @@ export function PersistForm({
           <span className="ml-2 text-xs text-green-700">Saved</span>
         ) : null}
       </span>
+      {restored ? (
+        <span className="no-print print:hidden ml-2 inline-flex items-center gap-1.5 text-xs text-muted">
+          <span role="status">Filters restored from your last visit.</span>
+          <button type="button" className="font-medium text-navy-2 underline" onClick={clearSaved}>
+            Clear
+          </button>
+        </span>
+      ) : null}
     </form>
   );
 }

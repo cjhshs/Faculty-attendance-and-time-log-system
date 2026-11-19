@@ -101,7 +101,7 @@ export default async function RepairPage({
               <Link
                 key={c.key}
                 href={q(baseParams, { category: c.key, page: "1" })}
-                className={"badge " + (c.key === category.key ? "bg-navy text-white" : "bg-zinc-100 text-zinc-700")}
+                className={"badge " + (c.key === category.key ? "bg-navy text-white" : "badge-neutral")}
               >
                 {c.label}
               </Link>
@@ -113,7 +113,7 @@ export default async function RepairPage({
               <Link
                 key={s || "any"}
                 href={q(baseParams, { severity: s, page: "1" })}
-                className={"badge " + (s === severity ? "bg-navy text-white" : "bg-zinc-100 text-zinc-700")}
+                className={"badge " + (s === severity ? "bg-navy text-white" : "badge-neutral")}
               >
                 {s === "" ? "Any" : `${s} (${sevCounts[s] ?? 0})`}
               </Link>
@@ -125,7 +125,7 @@ export default async function RepairPage({
               <Link
                 key={s || "any"}
                 href={q(baseParams, { status: s, page: "1" })}
-                className={"badge " + (s === status ? "bg-navy text-white" : "bg-zinc-100 text-zinc-700")}
+                className={"badge " + (s === status ? "bg-navy text-white" : "badge-neutral")}
               >
                 {s === "" ? "Any" : `${s} (${counts[s] ?? 0})`}
               </Link>
@@ -237,7 +237,7 @@ function SourceHeader({
         <h2 className="section-title mb-0">
           Analysis #{source.id} — {source.filename}
         </h2>
-        {source.appliedAt ? <span className="badge bg-green-100 text-green-800">Applied</span> : null}
+        {source.appliedAt ? <span className="badge badge-success">Applied</span> : null}
       </div>
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8">
         {stats.map((s) => (
