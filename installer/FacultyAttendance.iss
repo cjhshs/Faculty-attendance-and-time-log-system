@@ -3,6 +3,10 @@
 ; The installer never contains database or application secrets. Values entered
 ; in the wizard are written to a temporary secure file, consumed by the setup script,
 ; and deleted immediately.
+; For unattended deployments, /FACONFIGFILE=<path> may supply a [FacultyAttendance]
+; section with DbHost, DbPort, DbName, DbUser, DbPassword, PostgresBin, AppPort,
+; AdminUser, AdminPassword, AllowLan, CreateDatabase, Initialize, DesktopShortcut
+; and OpenBrowser values. Interactive installs are unchanged.
 
 #define AppName "Faculty Attendance and Time Log System"
 #define AppShortName "FacultyAttendance"
@@ -58,6 +62,7 @@ var
   OptionPage: TInputOptionWizardPage;
   IsUpgrade: Boolean;
   InstalledVersion: String;
+  OpenBrowserAfterInstall: Boolean;
 
 function InitializeSetup(): Boolean;
 var
@@ -65,6 +70,7 @@ var
 begin
   Result := True;
   IsUpgrade := False;
+  OpenBrowserAfterInstall := True;
   InstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{#AppIdGuid}_is1';
   if RegQueryStringValue(HKLM, InstallKey, 'DisplayVersion', InstalledVersion) then
   begin
@@ -206,6 +212,75 @@ begin
   end;
 end;
 
+function ParseConfigBool(const S: String; DefaultValue: Boolean): Boolean;
+var
+  U: String;
+begin
+  U := Uppercase(Trim(S));
+  if (U = 'TRUE') or (U = '1') or (U = 'YES') then
+    Result := True
+  else if (U = 'FALSE') or (U = '0') or (U = 'NO') then
+    Result := False
+  else
+    Result := DefaultValue;
+end;
+
+procedure ApplyConfigFileOverrides;
+var
+  I, LineIndex, EqPos: Integer;
+  Param, ConfigPath, Line, Key, Val, Section: String;
+  Lines: TArrayOfString;
+  InSection: Boolean;
+begin
+  for I := 1 to ParamCount do
+  begin
+    Param := ParamStr(I);
+    if Pos('/FACONFIGFILE=', Uppercase(Param)) = 1 then
+    begin
+      ConfigPath := Copy(Param, Length('/FACONFIGFILE=') + 1, Length(Param));
+      if (ConfigPath = '') or not FileExists(ConfigPath) then Continue;
+      if not LoadStringsFromFile(ConfigPath, Lines) then Continue;
+
+      InSection := False;
+      for LineIndex := 0 to GetArrayLength(Lines) - 1 do
+      begin
+        Line := Trim(Lines[LineIndex]);
+        if (Line = '') or (Line[1] = ';') or (Line[1] = '#') then Continue;
+        if Line[1] = '[' then
+        begin
+          if Length(Line) >= 2 then
+            Section := Trim(Copy(Line, 2, Length(Line) - 2))
+          else
+            Section := '';
+          InSection := Uppercase(Section) = 'FACULTYATTENDANCE';
+          Continue;
+        end;
+        if not InSection then Continue;
+
+        EqPos := Pos('=', Line);
+        if EqPos <= 1 then Continue;
+        Key := Uppercase(Trim(Copy(Line, 1, EqPos - 1)));
+        Val := Trim(Copy(Line, EqPos + 1, Length(Line) - EqPos));
+
+        if Key = 'DBHOST' then DbPage.Values[0] := Val
+        else if Key = 'DBPORT' then DbPage.Values[1] := Val
+        else if Key = 'DBNAME' then DbPage.Values[2] := Val
+        else if Key = 'DBUSER' then DbPage.Values[3] := Val
+        else if Key = 'DBPASSWORD' then DbPage.Values[4] := Val
+        else if Key = 'POSTGRESBIN' then DbPage.Values[5] := Val
+        else if Key = 'APPPORT' then AppPage.Values[0] := Val
+        else if Key = 'ADMINUSER' then AppPage.Values[1] := Val
+        else if Key = 'ADMINPASSWORD' then AppPage.Values[2] := Val
+        else if Key = 'ALLOWLAN' then OptionPage.Values[0] := ParseConfigBool(Val, OptionPage.Values[0])
+        else if Key = 'CREATEDATABASE' then OptionPage.Values[1] := ParseConfigBool(Val, OptionPage.Values[1])
+        else if Key = 'INITIALIZE' then OptionPage.Values[2] := ParseConfigBool(Val, OptionPage.Values[2])
+        else if Key = 'DESKTOPSHORTCUT' then OptionPage.Values[3] := ParseConfigBool(Val, OptionPage.Values[3])
+        else if Key = 'OPENBROWSER' then OpenBrowserAfterInstall := ParseConfigBool(Val, OpenBrowserAfterInstall);
+      end;
+    end;
+  end;
+end;
+
 procedure InitializeWizard;
 begin
   DbPage := CreateInputQueryPage(
@@ -264,6 +339,7 @@ begin
   OptionPage.Values[3] := True;
 
   TryLoadExistingEnv;
+  ApplyConfigFileOverrides;
 end;
 
 function NextButtonClick(CurPageID: Integer): Boolean;
@@ -386,9 +462,12 @@ begin
   end;
   DeleteFile(ConfigFile);
 
-  if not ShellExec('open', 'http://localhost:' + AppPage.Values[0] + '/', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
+  if OpenBrowserAfterInstall then
   begin
-    MsgBox('Installation completed successfully. You can open the system from your browser at http://localhost:' + AppPage.Values[0] + '/', mbInformation, MB_OK);
+    if not ShellExec('open', 'http://localhost:' + AppPage.Values[0] + '/', '', '', SW_SHOWNORMAL, ewNoWait, ErrorCode) then
+    begin
+      MsgBox('Installation completed successfully. You can open the system from your browser at http://localhost:' + AppPage.Values[0] + '/', mbInformation, MB_OK);
+    end;
   end;
 end;
 
