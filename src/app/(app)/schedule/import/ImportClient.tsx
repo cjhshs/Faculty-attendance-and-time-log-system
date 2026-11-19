@@ -625,9 +625,6 @@ function PlanView({
   for (const m of plan.programMapping) {
     if (m.collegeCode && m.collegeName) collegeNames.set(m.collegeCode, m.collegeName);
   }
-  const collegeCodes = Array.from(collegeNames.keys());
-  const hasUnassigned = plan.programMapping.some((m) => !m.collegeCode);
-
   const inScope = (m: { collegeCode: string | null; code: string }) =>
     scopeProgram
       ? m.code === scopeProgram

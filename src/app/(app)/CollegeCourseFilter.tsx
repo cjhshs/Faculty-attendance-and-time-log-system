@@ -10,8 +10,6 @@ export type FilterCollege = { code: string; name: string; programs: FilterProgra
 // All programs shown are official CET programs.
 export function CollegeCourseFilter({
   colleges,
-  unassigned = [],
-  college = "CET",
   program = "",
   showCounts = true,
   idPrefix = "scope",

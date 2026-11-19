@@ -73,6 +73,7 @@ export function CustomFacultySearch({
     function handleClickOutside(e: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setIsOpen(false);
+        setActiveIndex(-1);
       }
     }
     document.addEventListener("mousedown", handleClickOutside);
@@ -97,6 +98,7 @@ export function CustomFacultySearch({
         const data = await res.json();
         if (active) {
           setResults(data.results ?? []);
+          setActiveIndex(-1);
         }
       } catch (err) {
         if (active) {
@@ -112,11 +114,6 @@ export function CustomFacultySearch({
       clearTimeout(timer);
     };
   }, [query, date, schoolYear, semester, currentFacultyIds]);
-
-  // Reset the active option whenever the list or dropdown changes.
-  useEffect(() => {
-    setActiveIndex(-1);
-  }, [results, isOpen]);
 
   async function handleAdd() {
     if (!selectedFaculty) return;
@@ -153,6 +150,7 @@ export function CustomFacultySearch({
       setSelectedFaculty(null);
       setQuery("");
       setIsOpen(false);
+      setActiveIndex(-1);
 
       startTransition(() => {
         router.refresh();
@@ -192,14 +190,20 @@ export function CustomFacultySearch({
               setSelectedFaculty(null);
               setQuery(e.target.value);
               setIsOpen(true);
+              setActiveIndex(-1);
               setFeedback(null);
             }}
-            onFocus={() => setIsOpen(true)}
+            onFocus={() => {
+              setIsOpen(true);
+              setActiveIndex(-1);
+            }}
             onKeyDown={(e) => {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
-                if (!isOpen) setIsOpen(true);
-                else moveActive(1);
+                if (!isOpen) {
+                  setIsOpen(true);
+                  setActiveIndex(-1);
+                } else moveActive(1);
               } else if (e.key === "ArrowUp") {
                 e.preventDefault();
                 moveActive(-1);
@@ -212,6 +216,7 @@ export function CustomFacultySearch({
                 if (isOpen) {
                   e.preventDefault();
                   setIsOpen(false);
+                  setActiveIndex(-1);
                 }
               }
             }}
@@ -228,6 +233,7 @@ export function CustomFacultySearch({
                 setSelectedFaculty(null);
                 setQuery("");
                 setIsOpen(true);
+                setActiveIndex(-1);
               }}
               className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink text-xs font-bold"
               title="Clear selection"

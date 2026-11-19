@@ -28,7 +28,6 @@ function realPlan(): ImportPlan {
 }
 
 const plan = realPlan();
-const mapping = new Map(plan.programMapping.map((m) => [m.code, m]));
 
 describe("A. the official CET catalog", () => {
   it("lists all 5 CET program codes exactly once", () => {

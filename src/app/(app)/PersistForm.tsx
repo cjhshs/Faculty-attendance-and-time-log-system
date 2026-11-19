@@ -86,8 +86,9 @@ export function PersistForm({
         new CustomEvent("fa:draft-restored", { detail: { values: saved, storageKey } }),
       );
       // Tell the user their old filters came back, and offer a one-click reset
-      // (F19: restoring stale filters must not be silent).
-      setRestored(true);
+      // (F19: restoring stale filters must not be silent). Defer the state update
+      // so the mount effect does not synchronously trigger a second render.
+      queueMicrotask(() => setRestored(true));
     } catch {
       // Corrupt or disabled storage: keep the server-rendered defaults.
     }
