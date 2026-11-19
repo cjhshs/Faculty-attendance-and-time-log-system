@@ -4,7 +4,14 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { prisma } from "@/lib/prisma";
 import { getCourses, getFaculty, getRooms } from "@/lib/data";
 import { WEEKDAY_NAMES } from "@/lib/dates";
-import { getActiveTerm, listTerms, normalizeSemester, parseTerm, termWhere } from "@/lib/terms";
+import {
+  getActiveTerm,
+  isValidTerm,
+  listTerms,
+  normalizeSemester,
+  parseTerm,
+  termWhere,
+} from "@/lib/terms";
 import {
   getCollegeOptions,
   normalizeScopeSelection,
@@ -13,6 +20,7 @@ import {
 import { ScrollArea } from "../ScrollArea";
 import { CollegeCourseFilter } from "../CollegeCourseFilter";
 import { ScheduleTable, type ScheduleRowData } from "./ScheduleTable";
+import { NewScheduleButton } from "./NewScheduleButton";
 import { TermTools } from "./TermTools";
 import { ClearSchedules } from "./ClearSchedules";
 
@@ -54,7 +62,10 @@ export default async function SchedulePage({
   const years = Array.from(new Set(terms.map((t) => t.schoolYear)));
   const selectedYear = params.year ?? activeTerm.schoolYear;
   const selectedSem = params.sem ?? activeTerm.semester;
-  const selectedTerm = parseTerm(selectedYear, selectedSem);
+  const parsedTerm = parseTerm(selectedYear, selectedSem);
+  // "All years"/"All semesters" are filter values, not a real term. A new slot
+  // must never inherit them, so keep the term null and show every slot instead.
+  const selectedTerm = isValidTerm(parsedTerm) ? parsedTerm : null;
 
   const filters: Record<string, unknown>[] = [];
   if (selectedTerm) filters.push(termWhere(selectedTerm));
@@ -198,6 +209,14 @@ export default async function SchedulePage({
           <span className="text-sm text-muted">
             {total} slot{total === 1 ? "" : "s"}
           </span>
+          {canEdit ? (
+            <NewScheduleButton
+              faculty={facultyOptions}
+              rooms={roomOptions}
+              courses={courseOptions}
+              term={selectedTerm}
+            />
+          ) : null}
           {canImport ? (
             <Link className="btn btn-primary" href={importHref}>
               Import schedules

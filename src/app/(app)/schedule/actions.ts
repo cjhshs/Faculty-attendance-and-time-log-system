@@ -2,11 +2,12 @@
 
 import { revalidatePath } from "next/cache";
 import { prisma } from "@/lib/prisma";
-import { assertPermission } from "@/lib/session";
+import { assertPermission, hasPermission } from "@/lib/session";
 import { PERMISSIONS } from "@/lib/permissions";
 import { writeAudit } from "@/lib/audit";
 import { timeToMinutes, formatTime12, WEEKDAY_NAMES } from "@/lib/dates";
-import { formatSchoolYear, normalizeSemester } from "@/lib/terms";
+import { formatSchoolYear, normalizeSemester, isValidTerm } from "@/lib/terms";
+import { normaliseFacultyName, surnameOf } from "@/lib/schedule-parser";
 
 export type ScheduleEditState = { ok: boolean; message: string };
 
@@ -170,6 +171,220 @@ export async function updateScheduleSlot(
   revalidatePath("/dashboard");
 
   return { ok: true, message: `Schedule for CN ${cn} updated.` };
+}
+
+// ---------------------------------------------------------------------------
+// Create a brand-new schedule slot (optionally with a new faculty member)
+// ---------------------------------------------------------------------------
+
+export async function createScheduleSlot(
+  _prev: ScheduleEditState,
+  formData: FormData,
+): Promise<ScheduleEditState> {
+  let user;
+  try {
+    user = await assertPermission(PERMISSIONS.SCHEDULE_EDIT);
+  } catch {
+    return { ok: false, message: "You do not have permission to create schedules." };
+  }
+
+  // A slot always belongs to one explicit academic period. Never silently
+  // substitute the active term when the caller could not determine one.
+  const termSchoolYear = formatSchoolYear(str(formData, "termSchoolYear"));
+  const rawTermSemester = str(formData, "termSemester");
+  const termSemester = normalizeSemester(rawTermSemester) ?? rawTermSemester;
+  if (!isValidTerm({ schoolYear: termSchoolYear, semester: termSemester })) {
+    return {
+      ok: false,
+      message: "Choose a valid academic year and semester before creating a schedule.",
+    };
+  }
+
+  const cn = str(formData, "cn");
+  const subject = str(formData, "subject");
+  const description = str(formData, "description") || null;
+  const section = str(formData, "section") || null;
+  const yearLevel = str(formData, "yearLevel") || null;
+  const termType = str(formData, "termType") || null;
+  const units = Number(str(formData, "units") || "0");
+  const weekday = Number(str(formData, "weekday"));
+  const startTime = str(formData, "startTime");
+  const endTime = str(formData, "endTime");
+  const courseId = intOrNull(formData, "courseId");
+  const roomId = intOrNull(formData, "roomId");
+  const mode = str(formData, "mode") as ModeValue;
+
+  if (!cn) return { ok: false, message: "Class number (CN) is required." };
+  if (!subject) return { ok: false, message: "Subject is required." };
+  if (!courseId) return { ok: false, message: "Program is required." };
+  if (!roomId) return { ok: false, message: "Room is required." };
+  if (!Number.isInteger(weekday) || weekday < 0 || weekday > 6)
+    return { ok: false, message: "Choose a valid day." };
+  if (!TIME_RE.test(startTime)) return { ok: false, message: "Enter a valid start time." };
+  if (!TIME_RE.test(endTime)) return { ok: false, message: "Enter a valid end time." };
+  if (timeToMinutes(endTime) <= timeToMinutes(startTime))
+    return { ok: false, message: "The end time must be later than the start time." };
+  if (!MODES.includes(mode)) return { ok: false, message: "Choose a valid class mode." };
+  if (!Number.isFinite(units) || units < 0)
+    return { ok: false, message: "Units must be a positive number." };
+
+  const [course, room] = await Promise.all([
+    prisma.course.findUnique({ where: { id: courseId } }),
+    prisma.room.findUnique({ where: { id: roomId } }),
+  ]);
+  if (!course) return { ok: false, message: "The selected program does not exist." };
+  if (!room) return { ok: false, message: "The selected room does not exist." };
+
+  // A new teacher can be created in the same screen, but that needs the
+  // separate faculty-management permission.
+  const newFacultyName = normaliseFacultyName(str(formData, "newFacultyName"));
+  const facultyId = intOrNull(formData, "facultyId");
+  if (facultyId) {
+    const faculty = await prisma.faculty.findUnique({ where: { id: facultyId } });
+    if (!faculty) return { ok: false, message: "The selected faculty does not exist." };
+  }
+  if (newFacultyName) {
+    if (!hasPermission(user, PERMISSIONS.FACULTY_MANAGE)) {
+      return {
+        ok: false,
+        message:
+          "You do not have permission to add faculty. Ask an administrator to register the teacher first.",
+      };
+    }
+    const existing = await prisma.faculty.findFirst({
+      where: { fullName: { equals: newFacultyName, mode: "insensitive" } },
+    });
+    if (existing) {
+      return {
+        ok: false,
+        message: `${existing.fullName} already exists. Select them from the Faculty dropdown instead.`,
+      };
+    }
+  }
+
+  // Same identity check used by imports: CN + day + time + room in this term.
+  const duplicate = await prisma.scheduleSlot.findFirst({
+    where: {
+      schoolYear: termSchoolYear,
+      semester: termSemester,
+      cn,
+      weekday,
+      startTime,
+      endTime,
+      roomId,
+    },
+    select: { id: true },
+  });
+  if (duplicate) {
+    return {
+      ok: false,
+      message: `CN ${cn} already meets on ${WEEKDAY_NAMES[weekday]} ${startTime}–${endTime} in ${room.code} for ${termSchoolYear} ${termSemester}. Edit that slot instead of creating a duplicate.`,
+    };
+  }
+
+  // Block double-booking the teacher (and a physical room) in the same term.
+  const startMin = timeToMinutes(startTime);
+  const endMin = timeToMinutes(endTime);
+  const candidates = await prisma.scheduleSlot.findMany({
+    where: {
+      schoolYear: termSchoolYear,
+      semester: termSemester,
+      weekday,
+      OR: [
+        ...(facultyId ? [{ facultyId }] : []),
+        ...(room.type !== "TBA" ? [{ roomId }] : []),
+      ],
+    },
+    select: { cn: true, subject: true, startTime: true, endTime: true, facultyId: true, roomId: true },
+  });
+  const overlapping = candidates.filter(
+    (s) => startMin < timeToMinutes(s.endTime) && timeToMinutes(s.startTime) < endMin,
+  );
+  const facultyClash = facultyId
+    ? overlapping.find((s) => s.facultyId === facultyId)
+    : undefined;
+  if (facultyClash) {
+    return {
+      ok: false,
+      message: `That teacher already has ${facultyClash.subject} (CN ${facultyClash.cn}) on ${WEEKDAY_NAMES[weekday]} ${facultyClash.startTime}–${facultyClash.endTime}. Choose another time or faculty member.`,
+    };
+  }
+  const roomClash =
+    room.type === "TBA"
+      ? undefined
+      : overlapping.find((s) => s.roomId === roomId);
+  if (roomClash) {
+    return {
+      ok: false,
+      message: `${room.code} is already booked for ${roomClash.subject} (CN ${roomClash.cn}) at that time. Choose another room or time.`,
+    };
+  }
+
+  // Holder object: assignments inside the transaction callback are not visible
+  // to TypeScript's control-flow narrowing on a plain local variable.
+  const created = { faculty: null as { id: number; fullName: string } | null };
+  try {
+    await prisma.$transaction(async (tx) => {
+      let linkedFacultyId = facultyId;
+      if (newFacultyName) {
+        const cet = await tx.college.findFirst({ where: { code: "CET" } });
+        const newFacultyRow = await tx.faculty.create({
+          data: {
+            fullName: newFacultyName,
+            surname: surnameOf(newFacultyName),
+            departmentId: cet?.id ?? null,
+          },
+        });
+        linkedFacultyId = newFacultyRow.id;
+        created.faculty = { id: newFacultyRow.id, fullName: newFacultyRow.fullName };
+      }
+      await tx.scheduleSlot.create({
+        data: {
+          cn,
+          subject,
+          description,
+          section,
+          yearLevel,
+          termType,
+          semester: termSemester,
+          units: Math.round(units),
+          courseId,
+          facultyId: linkedFacultyId,
+          weekday,
+          startTime,
+          endTime,
+          roomId,
+          mode,
+          schoolYear: termSchoolYear,
+        },
+      });
+    });
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : "Unknown error";
+    return { ok: false, message: `Could not create the schedule: ${detail}` };
+  }
+
+  if (created.faculty) {
+    await writeAudit(
+      user.id,
+      "faculty.create",
+      `Created CET faculty #${created.faculty.id} ${created.faculty.fullName} while creating schedule CN ${cn}`,
+    );
+  }
+  await writeAudit(
+    user.id,
+    "schedule.create",
+    `Created slot CN ${cn} (${subject}) on ${WEEKDAY_NAMES[weekday]} ${startTime}–${endTime} in ${room.code} for ${termSchoolYear} ${termSemester}`,
+  );
+
+  revalidateScheduleViews();
+  revalidatePath("/master");
+
+  const suffix = created.faculty ? ` Added new faculty ${created.faculty.fullName}.` : "";
+  return {
+    ok: true,
+    message: `Created schedule for CN ${cn} on ${WEEKDAY_NAMES[weekday]} ${formatTime12(startTime)}–${formatTime12(endTime)}.${suffix}`,
+  };
 }
 
 function revalidateScheduleViews() {
