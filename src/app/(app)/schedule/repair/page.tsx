@@ -101,9 +101,11 @@ export default async function RepairPage({
               <Link
                 key={c.key}
                 href={q(baseParams, { category: c.key, page: "1" })}
+                aria-current={c.key === category.key ? "page" : undefined}
                 className={"badge " + (c.key === category.key ? "bg-navy text-white" : "badge-neutral")}
               >
                 {c.label}
+                {c.key === category.key ? <span className="visually-hidden"> (active)</span> : null}
               </Link>
             ))}
           </div>
@@ -113,9 +115,11 @@ export default async function RepairPage({
               <Link
                 key={s || "any"}
                 href={q(baseParams, { severity: s, page: "1" })}
+                aria-current={s === severity ? "page" : undefined}
                 className={"badge " + (s === severity ? "bg-navy text-white" : "badge-neutral")}
               >
                 {s === "" ? "Any" : `${s} (${sevCounts[s] ?? 0})`}
+                {s === severity ? <span className="visually-hidden"> (active)</span> : null}
               </Link>
             ))}
           </div>
@@ -125,9 +129,11 @@ export default async function RepairPage({
               <Link
                 key={s || "any"}
                 href={q(baseParams, { status: s, page: "1" })}
+                aria-current={s === status ? "page" : undefined}
                 className={"badge " + (s === status ? "bg-navy text-white" : "badge-neutral")}
               >
                 {s === "" ? "Any" : `${s} (${counts[s] ?? 0})`}
+                {s === status ? <span className="visually-hidden"> (active)</span> : null}
               </Link>
             ))}
           </div>

@@ -67,8 +67,8 @@ export default async function UsersPage() {
                 <input id="upassword" name="password" type="text" className="input" required />
               </div>
             </div>
-            <div className="mt-3">
-              <p className="label">Roles</p>
+            <fieldset className="mt-3">
+              <legend className="label">Roles</legend>
               <div className="flex flex-wrap gap-3">
                 {roles.map((role) => (
                   <label key={role.id} className="flex items-center gap-1 text-sm">
@@ -77,14 +77,15 @@ export default async function UsersPage() {
                   </label>
                 ))}
               </div>
-            </div>
+            </fieldset>
           </ActionForm>
         </section>
       ) : null}
 
-      <section className="card overflow-auto">
+      <section className="card">
         <h2 className="mb-3 section-title">Users ({users.length})</h2>
-        <table className="data-table">
+        <div role="region" aria-label="Users" tabIndex={0} className="scroll-region overflow-auto">
+          <table className="data-table">
           <caption className="visually-hidden">Users</caption>
           <thead>
             <tr>
@@ -111,48 +112,56 @@ export default async function UsersPage() {
                 {canManageUsers ? (
                   <td className="align-middle">
                     <div className="flex items-center gap-2 whitespace-nowrap">
-                    <ActionButton
-                      action={toggleUserActive}
-                      label={u.active ? "Deactivate" : "Activate"}
-                      fields={{ userId: u.id }}
-                    />
-                    <details>
-                      <summary className="cursor-pointer text-xs text-navy-2">Manage</summary>
-                      <div className="mt-2 w-64 space-y-2">
-                        <ActionForm action={assignRoles} submitLabel="Save roles">
-                          <input type="hidden" name="userId" value={u.id} />
-                          <div className="flex flex-wrap gap-2">
-                            {roles.map((role) => (
-                              <label key={role.id} className="flex items-center gap-1 text-xs">
-                                <input
-                                  type="checkbox"
-                                  name="roleIds"
-                                  value={role.id}
-                                  defaultChecked={u.userRoles.some((ur) => ur.roleId === role.id)}
-                                />
-                                {role.name}
-                              </label>
-                            ))}
-                          </div>
-                        </ActionForm>
-                        <ActionForm action={resetPassword} submitLabel="Reset password">
-                          <input type="hidden" name="userId" value={u.id} />
-                          <input
-                            name="password"
-                            type="text"
-                            className="input"
-                            placeholder="New temporary password"
-                          />
-                        </ActionForm>
-                      </div>
-                    </details>
+                      <ActionButton
+                        action={toggleUserActive}
+                        label={u.active ? "Deactivate" : "Activate"}
+                        fields={{ userId: u.id }}
+                      />
+                      <details>
+                        <summary className="cursor-pointer text-xs text-navy-2">Manage</summary>
+                        <div className="mt-2 w-64 space-y-2">
+                          <ActionForm action={assignRoles} submitLabel="Save roles">
+                            <input type="hidden" name="userId" value={u.id} />
+                            <fieldset>
+                              <legend className="visually-hidden">Roles for {u.name}</legend>
+                              <div className="flex flex-wrap gap-2">
+                                {roles.map((role) => (
+                                  <label key={role.id} className="flex items-center gap-1 text-xs">
+                                    <input
+                                      type="checkbox"
+                                      name="roleIds"
+                                      value={role.id}
+                                      defaultChecked={u.userRoles.some((ur) => ur.roleId === role.id)}
+                                    />
+                                    {role.name}
+                                  </label>
+                                ))}
+                              </div>
+                            </fieldset>
+                          </ActionForm>
+                          <ActionForm action={resetPassword} submitLabel="Reset password">
+                            <input type="hidden" name="userId" value={u.id} />
+                            <label className="visually-hidden" htmlFor={`reset-password-${u.id}`}>
+                              New temporary password for {u.name}
+                            </label>
+                            <input
+                              id={`reset-password-${u.id}`}
+                              name="password"
+                              type="text"
+                              className="input"
+                              placeholder="New temporary password"
+                            />
+                          </ActionForm>
+                        </div>
+                      </details>
                     </div>
-                    </td>
+                  </td>
                   ) : null}
                 </tr>
               ))}
           </tbody>
-        </table>
+          </table>
+        </div>
       </section>
 
       {canManageRoles ? (
@@ -175,8 +184,8 @@ export default async function UsersPage() {
             </div>
             <div className="mt-3 space-y-2">
               {Array.from(grouped.entries()).map(([group, list]) => (
-                <div key={group}>
-                  <p className="text-xs font-semibold uppercase text-muted">{group}</p>
+                <fieldset key={group}>
+                  <legend className="text-xs font-semibold uppercase text-muted">{group}</legend>
                   <div className="flex flex-wrap gap-3">
                     {list.map((p) => (
                       <label key={p.id} className="flex items-center gap-1 text-xs">
@@ -185,7 +194,7 @@ export default async function UsersPage() {
                       </label>
                     ))}
                   </div>
-                </div>
+                </fieldset>
               ))}
             </div>
           </ActionForm>
@@ -218,8 +227,8 @@ export default async function UsersPage() {
                 <input type="hidden" name="roleId" value={role.id} />
                 <div className="space-y-2">
                   {Array.from(grouped.entries()).map(([group, list]) => (
-                    <div key={group}>
-                      <p className="text-xs font-semibold uppercase text-muted">{group}</p>
+                    <fieldset key={group}>
+                      <legend className="text-xs font-semibold uppercase text-muted">{group}</legend>
                       <div className="flex flex-wrap gap-3">
                         {list.map((p) => {
                           const assigned = role.rolePermissions.some(
@@ -247,7 +256,7 @@ export default async function UsersPage() {
                           );
                         })}
                       </div>
-                    </div>
+                    </fieldset>
                   ))}
                 </div>
               </ActionForm>

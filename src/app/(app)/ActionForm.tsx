@@ -34,12 +34,7 @@ export function ActionForm({
       {state ? (
         <p
           role={state.ok ? "status" : "alert"}
-          className={
-            "mt-2 rounded-lg border px-2.5 py-1.5 text-xs " +
-            (state.ok
-              ? "border-green-200 bg-green-50 text-green-700"
-              : "border-red-200 bg-red-50 text-red-700")
-          }
+          className={"mt-2 status-inline " + (state.ok ? "status-inline-success" : "status-inline-error")}
         >
           {state.message}
         </p>
@@ -101,12 +96,7 @@ export function ActionButton({
         {state ? (
           <span
             role={state.ok ? "status" : "alert"}
-            className={
-              "ml-2 rounded-lg border px-2.5 py-1.5 text-xs " +
-              (state.ok
-                ? "border-green-200 bg-green-50 text-green-700"
-                : "border-red-200 bg-red-50 text-red-700")
-            }
+            className={"ml-2 status-inline " + (state.ok ? "status-inline-success" : "status-inline-error")}
           >
             {state.message}
           </span>

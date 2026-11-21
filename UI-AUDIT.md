@@ -1,5 +1,8 @@
 # UI Audit — Faculty Attendance and Time Log System
 
+> [!NOTE]
+> **Historical document — superseded.** This 2026-11-19 lead list predates the v1.0.2 UI refinement pass. Several findings below were already resolved before that pass, and the Bootstrap discrepancy is no longer open (the app uses Tailwind CSS v4 by design). The current source of truth is `.impeccable/audit/2026-11-20T12-15-28Z__project.md` plus the post-refinement verification results. Do not treat the priorities below as current without re-checking the code.
+
 **Date:** 2026-11-19
 **Scope:** Front-end UI only (Next.js App Router pages + `src/app/globals.css` design tokens). No code changed.
 **Method:** Static review of all `src/app/**/*.tsx` and `globals.css`, checked against the `modern-web-guidance` skill (search + retrieve, skill version `2026_11_10-47b4c80e`).

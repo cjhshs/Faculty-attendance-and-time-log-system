@@ -848,7 +848,12 @@ export default async function PrintPage({
                 </span>
               </h2>
             ) : null}
-            <div className="overflow-x-auto print:overflow-visible">
+            <div
+              role="region"
+              aria-label={`Attendance sheets for ${formatLong(day.date)}`}
+              tabIndex={0}
+              className="scroll-region overflow-x-auto print-scroll print:overflow-visible"
+            >
               <AttendanceSheets
                 date={day.date}
                 sheetKey={day.sheetKey}

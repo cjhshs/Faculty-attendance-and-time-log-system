@@ -78,6 +78,32 @@ header :where(a, button):focus-visible {
     nav a
   ) {
   min-block-size: var(--target-size);
+  min-inline-size: var(--target-size);
+}
+
+/* Theme the browser-owned surfaces that surround the drawn UI. */
+:root {
+  scrollbar-color: color-mix(in srgb, var(--navy-2) 45%, var(--border)) transparent;
+  scrollbar-width: thin;
+}
+::selection {
+  background: color-mix(in srgb, var(--navy-2) 22%, transparent);
+  color: var(--ink);
+}
+:where(input, textarea, [contenteditable="true"]):focus {
+  caret-color: var(--navy-2);
+}
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--navy-2) 45%, var(--border));
+  border: 2px solid var(--page);
+  border-radius: 999px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
 }
 
 /* Tidy line wrapping without extra layout cost on every element. */
@@ -257,6 +283,10 @@ dialog::backdrop {
   .card {
     @apply rounded-lg border border-line bg-white p-4 sm:p-5;
   }
+  .auth-shell {
+    @apply flex min-h-screen items-center justify-center p-4;
+    background: radial-gradient(1200px 600px at 50% -10%, var(--navy-2) 0%, var(--navy-deep) 55%);
+  }
 
   /* Native modal dialog panel. */
   .modal {
@@ -286,6 +316,18 @@ dialog::backdrop {
   .alert-collapsible-error {
     @apply border-red-200 bg-red-50 text-red-700;
   }
+  .alert-collapsible-info {
+    @apply border-line bg-slate-50 text-ink;
+  }
+  .status-inline {
+    @apply rounded-lg border px-2.5 py-1.5 text-xs;
+  }
+  .status-inline-success {
+    @apply border-green-200 bg-green-50 text-green-700;
+  }
+  .status-inline-error {
+    @apply border-red-200 bg-red-50 text-red-700;
+  }
 
   /* Tables ------------------------------------------------------------ */
   .data-table {
@@ -296,6 +338,7 @@ dialog::backdrop {
   }
   .data-table td {
     @apply border-b border-line px-3 py-2 align-top text-ink;
+    font-variant-numeric: tabular-nums;
   }
   .data-table tbody tr:hover {
     @apply bg-slate-50/70;
@@ -343,6 +386,9 @@ dialog::backdrop {
      they actually have, not the viewport (F5). */
   .scroll-region {
     container-type: inline-size;
+    /* Keep wide tables inside their own scrollport instead of extending the
+       document's horizontal scroll area. Disabled for print below. */
+    contain: paint;
   }
 
   /* Stacked "card" layout for opted-in wide tables on narrow containers. */
@@ -481,6 +527,13 @@ dialog::backdrop {
     margin: 0 !important;
     box-shadow: none !important;
     border: 0 !important;
+  }
+  /* Screen-only scroll containment must never clip a printed table. */
+  .print-scroll {
+    overflow: visible !important;
+  }
+  .scroll-region {
+    contain: none !important;
   }
   /* The last sheet must not emit a trailing blank page. */
   .print-sheet:last-child {

@@ -157,7 +157,7 @@ export function SignatureFab({
               {message ? (
                 <span
                   className={"text-xs " + (message.ok ? "text-green-700" : "text-red-700")}
-                  role="status"
+                  role={message.ok ? "status" : "alert"}
                 >
                   {message.text}
                 </span>

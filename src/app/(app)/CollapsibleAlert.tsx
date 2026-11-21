@@ -15,7 +15,7 @@ export function CollapsibleAlert({ summary, children, variant = "warn", classNam
     variant === "error"
       ? "alert-collapsible-error"
       : variant === "info"
-        ? "border-line bg-slate-50 text-ink"
+        ? "alert-collapsible-info"
         : "alert-collapsible-warn";
 
   return (
@@ -40,10 +40,10 @@ export function CollapsibleAlert({ summary, children, variant = "warn", classNam
       <div
         className={`mt-1 rounded-md border px-3 py-2 text-xs ${
           variant === "error"
-            ? "border-red-200 bg-red-50 text-red-700"
+            ? "alert-collapsible-error"
             : variant === "info"
-              ? "border-line bg-slate-50 text-ink"
-              : "border-amber-200 bg-amber-50 text-amber-800"
+              ? "alert-collapsible-info"
+              : "alert-collapsible-warn"
         }`}
       >
         {children}

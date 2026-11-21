@@ -489,12 +489,20 @@ export function ImportClient({
         </div>
       ) : null}
 
-      {error ? <div className="alert alert-error">{error}</div> : null}
+      {error ? (
+        <div role="alert" className="alert alert-error">
+          {error}
+        </div>
+      ) : null}
 
-      {termWarning ? <div className="alert alert-warn">{termWarning}</div> : null}
+      {termWarning ? (
+        <div role="status" className="alert alert-warn">
+          {termWarning}
+        </div>
+      ) : null}
 
       {result ? (
-        <div className="alert alert-success">
+        <div role="status" className="alert alert-success">
           {reprocessOnly ? "Reprocess" : "Import"} complete into {schoolYear.trim()} {semester}:{" "}
           {result.created} added, {result.updated} updated, {result.unchanged} unchanged.{" "}
           {result.facultyCreated} new faculty, {result.programsCreated} new program(s),{" "}
@@ -544,9 +552,9 @@ export function ImportClient({
       ) : null}
 
       <div className="card">
-        <h3 className="mb-2 text-sm font-semibold text-navy">
+        <h2 className="mb-2 text-sm font-semibold text-navy">
           Import history ({importHistory.length})
-        </h3>
+        </h2>
         <p className="mb-2 text-xs text-muted">
           Every committed upload is recorded with its academic period and a checksum. Re-uploading
           the exact same file into the same period asks for confirmation before writing anything.
@@ -554,7 +562,12 @@ export function ImportClient({
         {importHistory.length === 0 ? (
           <p className="text-sm text-muted">No schedules have been imported yet.</p>
         ) : (
-          <div className="max-h-72 overflow-auto">
+          <div
+            role="region"
+            aria-label="Import history"
+            tabIndex={0}
+            className="scroll-region max-h-72 overflow-auto"
+          >
             <table className="data-table min-w-[38rem]">
               <caption className="visually-hidden">Import history</caption>
               <thead>
@@ -706,7 +719,7 @@ function PlanView({
 
       <div className="card space-y-3">
         <div>
-          <h3 className="text-sm font-semibold text-navy">Import scope</h3>
+          <h2 className="text-sm font-semibold text-navy">Import scope</h2>
           <p className="text-xs text-muted">
             Only the selected college or course is written. The whole file is always validated, so
             instructor conflicts between departments are still reported.
@@ -714,9 +727,7 @@ function PlanView({
         </div>
         <div className="flex flex-wrap items-end gap-4">
           <div>
-            <label className="label">
-              College / Department
-            </label>
+            <p className="label">College / Department</p>
             <div className="rounded-md border border-line bg-slate-100 px-3 py-2 text-sm font-semibold text-navy">
               CET — College of Engineering and Technology
             </div>
@@ -766,7 +777,7 @@ function PlanView({
             : ""}
         </p>
         {unresolvedAmbiguous.length > 0 ? (
-          <p className="rounded-lg border border-red-200 bg-red-50 px-2.5 py-1.5 text-xs text-red-700">
+          <p className="status-inline status-inline-error" role="alert">
             {unresolvedAmbiguous.length} ambiguous instructor name
             {unresolvedAmbiguous.length === 1 ? "" : "s"} must be resolved in the Instructor review
             section before this import can be confirmed.
@@ -776,7 +787,7 @@ function PlanView({
 
       <div className="card space-y-3">
         <div>
-          <h3 className="text-sm font-semibold text-navy">Department Classification Breakdown</h3>
+          <h2 className="text-sm font-semibold text-navy">Department Classification Breakdown</h2>
           <p className="text-xs text-muted">
             Parsed rows classified strictly by the instructor&apos;s registered faculty department (independent of teaching assignment or student course codes).
           </p>
@@ -865,7 +876,12 @@ function PlanView({
           Every course code in the file is listed. Unassigned programs are imported but wait for an
           administrator to choose a college on the Master Data page.
         </p>
-        <div className="max-h-80 overflow-auto">
+        <div
+          role="region"
+          aria-label="Program mapping"
+          tabIndex={0}
+          className="scroll-region max-h-80 overflow-auto"
+        >
           <table className="data-table">
             <caption className="visually-hidden">Program mapping</caption>
             <thead>
@@ -924,7 +940,12 @@ function PlanView({
             Unknown names may be new hires or typos; ambiguous names match more than one roster row
             and must be resolved here. All imported faculty are assigned to CET.
           </p>
-          <div className="max-h-80 overflow-auto">
+          <div
+            role="region"
+            aria-label="Instructor review"
+            tabIndex={0}
+            className="scroll-region max-h-80 overflow-auto"
+          >
             <table className="data-table">
               <caption className="visually-hidden">Instructor review</caption>
               <thead>
@@ -1170,7 +1191,12 @@ function PlanView({
       ) : null}
 
       <Section title={`Parsed schedule slots (${plan.slots.length})`}>
-        <div className="max-h-96 overflow-auto">
+        <div
+          role="region"
+          aria-label="Parsed schedule slots"
+          tabIndex={0}
+          className="scroll-region max-h-96 overflow-auto"
+        >
           <table className="data-table">
             <caption className="visually-hidden">Parsed schedule slots</caption>
             <thead>
@@ -1277,7 +1303,7 @@ function Stat({
   return (
     <div className="card">
       <p className="text-xs font-semibold uppercase tracking-wide text-muted">{label}</p>
-      <p className={`mt-1 text-lg font-bold ${toneClass}`}>{value}</p>
+      <p className={`mt-1 text-lg font-bold tabular-nums ${toneClass}`}>{value}</p>
       {hint ? <p className="text-[11px] text-muted">{hint}</p> : null}
     </div>
   );
@@ -1300,7 +1326,7 @@ function Section({
         : "border-line";
   return (
     <div className={`mt-4 rounded-lg border ${toneClass} p-4`}>
-      <h3 className="mb-2 text-sm font-semibold text-navy">{title}</h3>
+      <h2 className="mb-2 text-sm font-semibold text-navy">{title}</h2>
       {children}
     </div>
   );

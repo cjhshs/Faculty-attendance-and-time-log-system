@@ -9,10 +9,7 @@ export default async function ChangePasswordPage() {
   if (!user) redirect("/login");
 
   return (
-    <div
-      className="flex min-h-screen items-center justify-center p-4"
-      style={{ background: "radial-gradient(1200px 600px at 50% -10%, #234b73 0%, #0b1f38 55%)" }}
-    >
+    <div className="auth-shell">
       <div className="w-full max-w-[400px]">
         <div className="overflow-hidden rounded-2xl border border-line bg-white shadow-xl">
           <div className="flex flex-col items-center gap-3 border-b border-line px-6 py-6 text-center">

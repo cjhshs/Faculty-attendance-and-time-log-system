@@ -1,7 +1,7 @@
 "use client";
 
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useMemo, useState } from "react";
+import { useId, useMemo, useState } from "react";
 
 // Stable "print page N" control. Page boundaries are computed on the server from
 // the schedule data, so choosing page N never re-paginates the report.
@@ -17,6 +17,7 @@ export function PrintPageSelector({
   const searchParams = useSearchParams();
   const [page, setPage] = useState(String(currentPage ?? 1));
   const [error, setError] = useState<string | null>(null);
+  const errorId = useId();
 
   const options = useMemo(
     () => Array.from({ length: Math.max(1, totalPages) }, (_, i) => i + 1),
@@ -49,7 +50,8 @@ export function PrintPageSelector({
               className="input h-9 w-24"
               value={page}
               onChange={(e) => setPage(e.target.value)}
-              aria-label="Page number to print"
+              aria-invalid={error ? true : undefined}
+              aria-describedby={error ? errorId : undefined}
             >
               {options.map((n) => (
                 <option key={n} value={n}>
@@ -93,7 +95,11 @@ export function PrintPageSelector({
           </span>
         )}
       </div>
-      {error ? <p className="mt-2 text-xs text-red-700">{error}</p> : null}
+      {error ? (
+        <p id={errorId} role="alert" className="mt-2 text-xs text-red-700">
+          {error}
+        </p>
+      ) : null}
       {currentPage ? (
         <p className="mt-2 text-xs text-muted">
           Previewing page {currentPage} of {Math.max(1, totalPages)}. Only this page will print.

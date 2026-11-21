@@ -82,7 +82,7 @@ export function TermTools({
 
           {state.message ? (
             <p
-              role="status"
+              role={state.ok ? "status" : "alert"}
               className={`alert block w-full ${state.ok ? "alert-success" : "alert-error"}`}
             >
               {state.message}

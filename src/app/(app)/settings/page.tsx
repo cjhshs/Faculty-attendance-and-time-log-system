@@ -236,7 +236,12 @@ export default async function SettingsPage() {
           </p>
         </ActionForm>
 
-        <div className="mt-5 overflow-x-auto">
+        <div
+          role="region"
+          aria-label="Academic periods"
+          tabIndex={0}
+          className="scroll-region mt-5 overflow-x-auto"
+        >
           <table className="data-table min-w-[42rem]">
             <caption className="visually-hidden">Academic periods</caption>
             <thead>

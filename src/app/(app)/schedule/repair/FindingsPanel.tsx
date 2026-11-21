@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState } from "react";
+import { useActionState, useId } from "react";
 import Link from "next/link";
 import {
   decideRepairFinding,
@@ -98,6 +98,7 @@ const suggestInitial: RepairSuggestState = { ok: false, message: "" };
 function FindingRow({ finding, aiEnabled }: { finding: FindingItem; aiEnabled: boolean }) {
   const [state, action, pending] = useActionState(decideRepairFinding, decideInitial);
   const [suggestion, suggestAction, suggesting] = useActionState(suggestRepairFinding, suggestInitial);
+  const valueId = useId();
   const needsValue = finding.proposed === null;
   const baseValue = finding.appliedValue ?? finding.proposed ?? finding.original ?? "";
   // A successful AI suggestion pre-fills the field by remounting it (keyed), so
@@ -128,7 +129,11 @@ function FindingRow({ finding, aiEnabled }: { finding: FindingItem; aiEnabled: b
 
       <form action={action} className="mt-2 flex flex-wrap items-center gap-2">
         <input type="hidden" name="findingId" value={finding.id} />
+        <label className="visually-hidden" htmlFor={valueId}>
+          Corrected value for row {finding.rowNumber}
+        </label>
         <input
+          id={valueId}
           key={fieldValue}
           name="value"
           defaultValue={fieldValue}
@@ -145,7 +150,12 @@ function FindingRow({ finding, aiEnabled }: { finding: FindingItem; aiEnabled: b
           Unresolved
         </button>
         {state.message ? (
-          <span className={"text-xs " + (state.ok ? "text-green-700" : "text-red-700")}>{state.message}</span>
+          <span
+            role={state.ok ? "status" : "alert"}
+            className={"text-xs " + (state.ok ? "text-green-700" : "text-red-700")}
+          >
+            {state.message}
+          </span>
         ) : null}
       </form>
 
@@ -156,7 +166,12 @@ function FindingRow({ finding, aiEnabled }: { finding: FindingItem; aiEnabled: b
             {suggesting ? "Asking AI…" : "Ask AI for a suggestion"}
           </button>
           {suggestion.message ? (
-            <span className={"text-xs " + (suggestion.ok ? "text-muted" : "text-red-700")}>{suggestion.message}</span>
+            <span
+              role={suggestion.ok ? "status" : "alert"}
+              className={"text-xs " + (suggestion.ok ? "text-muted" : "text-red-700")}
+            >
+              {suggestion.message}
+            </span>
           ) : null}
         </form>
       ) : null}

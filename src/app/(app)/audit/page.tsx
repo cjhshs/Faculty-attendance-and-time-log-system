@@ -98,7 +98,7 @@ export default async function AuditPage({
         ) : (
           <span />
         )}
-        <span className="text-zinc-500">
+        <span className="text-muted">
           Page {page} of {totalPages}
         </span>
         {page < totalPages ? (

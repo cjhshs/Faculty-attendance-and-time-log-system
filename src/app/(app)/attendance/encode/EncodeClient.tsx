@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
 import { ScrollArea } from "../../ScrollArea";
 import { useConfirm } from "../../confirm";
 import {
@@ -556,7 +556,7 @@ export function EncodeClient({
             <svg
               aria-hidden="true"
               viewBox="0 0 20 20"
-              className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-zinc-400"
+              className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
               fill="currentColor"
             >
               <path
@@ -657,7 +657,7 @@ export function EncodeClient({
       </div>
 
       <ScrollArea
-        className="rounded-md border border-zinc-200 bg-white"
+        className="rounded-md border border-line bg-white"
         label="Attendance encoding grid"
       >
         <table className="w-full border-collapse text-xs">
@@ -666,7 +666,7 @@ export function EncodeClient({
               <th
                 rowSpan={2}
                 scope="col"
-                className="sticky left-0 top-0 z-30 min-w-[5.5rem] border border-zinc-300 bg-zinc-100 px-2 py-1 shadow-[1px_0_0_0_#d4d4d8]"
+                className="sticky left-0 top-0 z-30 min-w-[5.5rem] border border-line bg-slate-100 px-2 py-1 shadow-[1px_0_0_0_#d4d4d8]"
               >
                 TIME
               </th>
@@ -678,8 +678,8 @@ export function EncodeClient({
                     colSpan={2}
                     scope="colgroup"
                     className={
-                      "min-w-[15rem] border border-zinc-300 px-2 py-1 text-center font-bold " +
-                      (filtering && !matched ? "bg-zinc-50 text-zinc-400" : "bg-zinc-100")
+                      "min-w-[15rem] border border-line px-2 py-1 text-center font-bold " +
+                      (filtering && !matched ? "bg-slate-50 text-muted" : "bg-slate-100")
                     }
                   >
                     {col.label}
@@ -690,8 +690,8 @@ export function EncodeClient({
             <tr>
               {columns.map((col) => (
                 <Fragment key={col.facultyId}>
-                  <th scope="col" className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-[10px]">ROOM</th>
-                  <th scope="col" className="border border-zinc-300 bg-zinc-100 px-2 py-1 text-[10px]">ENTRY</th>
+                  <th scope="col" className="border border-line bg-slate-100 px-2 py-1 text-xs">ROOM</th>
+                  <th scope="col" className="border border-line bg-slate-100 px-2 py-1 text-xs">ENTRY</th>
                 </Fragment>
               ))}
             </tr>
@@ -699,7 +699,7 @@ export function EncodeClient({
           <tbody>
             {rows.map((row, rowIndex) => (
               <tr key={row.hour}>
-                <td className="sticky left-0 z-20 whitespace-nowrap border border-zinc-200 bg-white px-2 py-1 text-center text-xs shadow-[1px_0_0_0_#e4e4e7]">
+                <td className="sticky left-0 z-20 whitespace-nowrap border border-line bg-white px-2 py-1 text-center text-xs shadow-[1px_0_0_0_#e4e4e7]">
                   {row.label}
                 </td>
                 {columns.map((col, colIndex) => {
@@ -734,17 +734,17 @@ export function EncodeClient({
                       update={update}
                     />
                   ) : (
-                    <span className="text-zinc-300">—</span>
+                    <span className="text-muted">—</span>
                   );
                   const entryCellClass =
-                    "min-w-[11rem] border border-zinc-200 px-1 py-1 " + statusClass + " " + dimClass;
+                    "min-w-[11rem] border border-line px-1 py-1 " + statusClass + " " + dimClass;
                   if (spot && typeof spot === "object") {
                     return (
                       <Fragment key={col.facultyId}>
                         <td
                           rowSpan={spot.span}
                           className={
-                            "min-w-[6rem] border border-zinc-200 px-1 py-1 text-center align-middle text-[11px] font-medium " +
+                            "min-w-[6rem] border border-line px-1 py-1 text-center align-middle text-xs font-medium " +
                             dimClass
                           }
                         >
@@ -763,8 +763,8 @@ export function EncodeClient({
                   }
                   return (
                     <Fragment key={col.facultyId}>
-                      <td className="border border-zinc-200 bg-zinc-50" />
-                      <td className="border border-zinc-200 bg-zinc-50" />
+                      <td className="border border-line bg-slate-50" />
+                      <td className="border border-line bg-slate-50" />
                     </Fragment>
                   );
                 })}
@@ -780,12 +780,12 @@ export function EncodeClient({
         </p>
       ) : null}
 
-      <div className="sticky bottom-0 flex flex-wrap items-center gap-4 border-t border-zinc-200 bg-white/95 px-1 py-3">
+      <div className="sticky bottom-0 flex flex-wrap items-center gap-4 border-t border-line bg-white/95 px-1 py-3">
         <span className="text-sm">
           <strong>{allCells.length}</strong> scheduled hours &middot;{" "}
           <strong className="text-green-700">{presentCount}</strong> present &middot;{" "}
           <strong className="text-red-700">{absentCount}</strong> absent &middot;{" "}
-          <strong className="text-zinc-600">{unsetCount}</strong> not yet encoded
+          <strong className="text-muted">{unsetCount}</strong> not yet encoded
         </span>
         <button
           className="btn btn-primary"
@@ -841,13 +841,13 @@ function DraftIndicator({
                 ? "text-amber-700"
                 : "text-green-700"
           }
-          role="status"
+          role={authExpired || state === "failed" ? "alert" : "status"}
         >
           {text}
         </span>
       ) : null}
       {onDiscard ? (
-        <button type="button" className="text-xs text-zinc-500 underline" onClick={onDiscard}>
+        <button type="button" className="text-xs text-muted underline" onClick={onDiscard}>
           Discard draft
         </button>
       ) : null}
@@ -875,26 +875,29 @@ function EntryControl({
   update: (key: string, patch: Partial<CellValue>) => void;
 }) {
   const status = value?.status ?? "unset";
+  const roomOverrideId = useId();
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-1.5">
-        <input
-          type="checkbox"
-          className="h-3.5 w-3.5 shrink-0 accent-blue-600"
-          checked={checked}
-          disabled={locked}
-          aria-label={`Select hour ${cell.key}`}
-          title="Select this hour (Shift-click for a range)"
-          // The checkbox is fully controlled by `selected`; the native change is
-          // ignored and the click (with its shiftKey) drives the selection. Not
-          // calling preventDefault lets React reconcile the controlled `checked`
-          // prop reliably after every click.
-          onChange={() => undefined}
-          onClick={(e) => onToggleCheck(e.shiftKey)}
-        />
+        <span className="inline-flex min-h-[var(--target-size)] min-w-[var(--target-size)] shrink-0 items-center justify-center">
+          <input
+            type="checkbox"
+            className="h-3.5 w-3.5 shrink-0 accent-blue-600"
+            checked={checked}
+            disabled={locked}
+            aria-label={`Select hour ${cell.key}`}
+            title="Select this hour (Shift-click for a range)"
+            // The checkbox is fully controlled by `selected`; the native change is
+            // ignored and the click (with its shiftKey) drives the selection. Not
+            // calling preventDefault lets React reconcile the controlled `checked`
+            // prop reliably after every click.
+            onChange={() => undefined}
+            onClick={(e) => onToggleCheck(e.shiftKey)}
+          />
+        </span>
         <select
           className={
-            "input h-8 w-auto flex-1 px-1 py-0.5 text-[11px] " +
+            "input h-8 w-auto flex-1 px-1 py-0.5 text-xs " +
             (invalid ? "border-red-500 bg-red-50" : "")
           }
           value={status}
@@ -912,7 +915,7 @@ function EntryControl({
           type="text"
           placeholder="reason (required)"
           className={
-            "input w-auto px-1 py-0.5 text-[11px] " +
+            "input w-auto px-1 py-0.5 text-xs " +
             (invalid ? "border-red-500 bg-red-50" : "")
           }
           value={value?.reason ?? ""}
@@ -923,14 +926,20 @@ function EntryControl({
         />
       ) : null}
       {cell.roomType === "TBA" ? (
-        <input
-          type="text"
-          placeholder="actual room"
-          className="input w-auto px-1 py-0.5 text-[11px]"
-          value={value?.roomOverride ?? ""}
-          disabled={locked}
-          onChange={(e) => update(cell.key, { roomOverride: e.target.value })}
-        />
+        <>
+          <label className="visually-hidden" htmlFor={roomOverrideId}>
+            Actual room for {cell.key}
+          </label>
+          <input
+            id={roomOverrideId}
+            type="text"
+            placeholder="actual room"
+            className="input w-auto px-1 py-0.5 text-xs"
+            value={value?.roomOverride ?? ""}
+            disabled={locked}
+            onChange={(e) => update(cell.key, { roomOverride: e.target.value })}
+          />
+        </>
       ) : null}
     </div>
   );

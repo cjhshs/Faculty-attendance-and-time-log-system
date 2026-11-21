@@ -446,58 +446,71 @@ function EditModal({
             </legend>
             <div className="grid gap-3 sm:grid-cols-3">
               <div>
-                <label className="label req" htmlFor="e-day">
-                  Day
-                </label>
                 {locked ? (
                   <>
+                    <p className="label">Day</p>
                     <input type="hidden" name="weekday" value={row.weekday} />
                     <input type="hidden" name="startTime" value={row.startTime} />
                     <input type="hidden" name="endTime" value={row.endTime} />
                     <p className="input bg-slate-50 text-muted">{WEEKDAY_NAMES[row.weekday]}</p>
                   </>
                 ) : (
-                  <select id="e-day" name="weekday" className="select" defaultValue={row.weekday} required>
-                    {WEEKDAY_NAMES.map((name, index) => (
-                      <option key={index} value={index}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
+                  <>
+                    <label className="label req" htmlFor="e-day">
+                      Day
+                    </label>
+                    <select id="e-day" name="weekday" className="select" defaultValue={row.weekday} required>
+                      {WEEKDAY_NAMES.map((name, index) => (
+                        <option key={index} value={index}>
+                          {name}
+                        </option>
+                      ))}
+                    </select>
+                  </>
                 )}
               </div>
               <div>
-                <label className="label req" htmlFor="e-start">
-                  Start time
-                </label>
                 {locked ? (
-                  <p className="input bg-slate-50 text-muted">{formatTime12(row.startTime)}</p>
+                  <>
+                    <p className="label">Start time</p>
+                    <p className="input bg-slate-50 text-muted">{formatTime12(row.startTime)}</p>
+                  </>
                 ) : (
-                  <input
-                    id="e-start"
-                    type="time"
-                    name="startTime"
-                    className="input"
-                    defaultValue={row.startTime}
-                    required
-                  />
+                  <>
+                    <label className="label req" htmlFor="e-start">
+                      Start time
+                    </label>
+                    <input
+                      id="e-start"
+                      type="time"
+                      name="startTime"
+                      className="input"
+                      defaultValue={row.startTime}
+                      required
+                    />
+                  </>
                 )}
               </div>
               <div>
-                <label className="label req" htmlFor="e-end">
-                  End time
-                </label>
                 {locked ? (
-                  <p className="input bg-slate-50 text-muted">{formatTime12(row.endTime)}</p>
+                  <>
+                    <p className="label">End time</p>
+                    <p className="input bg-slate-50 text-muted">{formatTime12(row.endTime)}</p>
+                  </>
                 ) : (
-                  <input
-                    id="e-end"
-                    type="time"
-                    name="endTime"
-                    className="input"
-                    defaultValue={row.endTime}
-                    required
-                  />
+                  <>
+                    <label className="label req" htmlFor="e-end">
+                      End time
+                    </label>
+                    <input
+                      id="e-end"
+                      type="time"
+                      name="endTime"
+                      className="input"
+                      defaultValue={row.endTime}
+                      required
+                    />
+                  </>
                 )}
               </div>
             </div>

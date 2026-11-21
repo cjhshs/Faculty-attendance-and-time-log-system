@@ -16,7 +16,7 @@ export default async function CalendarPage() {
         <section className="card">
           <h2 className="mb-3 section-title">Add a single date</h2>
           <ActionForm action={addHoliday} submitLabel="Add date" resetOnSuccess>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
               <div>
                 <label className="label" htmlFor="hdate">
                   Date
@@ -36,7 +36,7 @@ export default async function CalendarPage() {
         <section className="card">
           <h2 className="mb-3 section-title">Add a date range</h2>
           <ActionForm action={addHolidayRange} submitLabel="Add range" resetOnSuccess>
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
               <div>
                 <label className="label" htmlFor="start">
                   Start
@@ -62,7 +62,12 @@ export default async function CalendarPage() {
 
       <section className="card">
         <h2 className="mb-3 section-title">No-class dates ({holidays.length})</h2>
-        <div className="max-h-96 overflow-auto">
+        <div
+          role="region"
+          aria-label="No-class dates"
+          tabIndex={0}
+          className="scroll-region max-h-96 overflow-auto"
+        >
           <table className="data-table">
             <caption className="visually-hidden">No-class dates</caption>
             <thead>

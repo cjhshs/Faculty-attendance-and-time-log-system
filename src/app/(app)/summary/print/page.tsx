@@ -154,13 +154,18 @@ export default async function SummaryPrintPage({
 
       <AutoPrint enabled={params.autoprint === "1"} />
 
-      <div className="print-sheet bg-white p-4">
+      <div
+        role="region"
+        aria-label="Attendance summary report"
+        tabIndex={0}
+        className="print-sheet scroll-region overflow-x-auto bg-white p-4 print-scroll"
+      >
         <div className="text-center">
           <p className="text-sm font-bold">{settings.school_header}</p>
           <p className="text-sm font-semibold">{settings.college_header}</p>
-          <p className="text-base font-bold tracking-widest">
+          <h1 className="text-base font-bold tracking-widest">
             {selectedFaculty ? "INDIVIDUAL FACULTY ATTENDANCE SUMMARY" : "ATTENDANCE SUMMARY"}
-          </p>
+          </h1>
           <p className="text-sm font-semibold">{range.header}</p>
           {selectedFaculty ? (
             <p className="text-sm font-semibold">
@@ -247,7 +252,7 @@ export default async function SummaryPrintPage({
                   <tr>
                     <td
                       colSpan={7}
-                      className="border border-black px-1 py-2 text-center text-zinc-500"
+                      className="border border-black px-1 py-2 text-center text-muted"
                     >
                       No attendance records exist for this faculty member in the selected range.
                     </td>
@@ -306,7 +311,7 @@ export default async function SummaryPrintPage({
                 ))}
                 {rows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="border border-black px-1 py-2 text-center text-zinc-500">
+                    <td colSpan={9} className="border border-black px-1 py-2 text-center text-muted">
                       {params.faculty
                         ? "The requested faculty member is not in this summary scope. Nothing was substituted."
                         : "No attendance records exist within the selected range."}

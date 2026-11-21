@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState, useTransition } from "react";
+import { useEffect, useId, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import type { FacultySearchResult } from "@/lib/custom-sheet-faculty";
 
@@ -34,7 +34,8 @@ export function CustomFacultySearch({
   );
   const [, startTransition] = useTransition();
   const containerRef = useRef<HTMLDivElement>(null);
-  const listboxId = "custom-faculty-listbox";
+  const listboxId = useId();
+  const courseSelectId = useId();
   const [activeIndex, setActiveIndex] = useState(-1);
 
   const isDisabled = (item: FacultySearchResult) =>
@@ -185,7 +186,6 @@ export function CustomFacultySearch({
             aria-activedescendant={
               isOpen && activeIndex >= 0 ? `${listboxId}-option-${activeIndex}` : undefined
             }
-            aria-label="Search faculty to add to this sheet"
             onChange={(e) => {
               setSelectedFaculty(null);
               setQuery(e.target.value);
@@ -229,13 +229,14 @@ export function CustomFacultySearch({
           {selectedFaculty ? (
             <button
               type="button"
+              aria-label="Clear selected faculty"
               onClick={() => {
                 setSelectedFaculty(null);
                 setQuery("");
                 setIsOpen(true);
                 setActiveIndex(-1);
               }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted hover:text-ink text-xs font-bold"
+              className="absolute right-2 top-1/2 inline-flex min-w-6 -translate-y-1/2 items-center justify-center text-muted hover:text-ink text-xs font-bold"
               title="Clear selection"
             >
               &times;
@@ -248,13 +249,13 @@ export function CustomFacultySearch({
           ) : null}
 
           {/* Autocomplete Dropdown */}
-          {isOpen && (
-            <div
-              id={listboxId}
-              role="listbox"
-              aria-label="Faculty search results"
-              className="absolute left-0 z-50 mt-1 max-h-60 w-80 overflow-y-auto rounded-md border border-line bg-white p-1 shadow-lg text-xs"
-            >
+          <div
+            id={listboxId}
+            role="listbox"
+            aria-label="Faculty search results"
+            hidden={!isOpen}
+            className="absolute left-0 z-50 mt-1 max-h-60 w-[min(20rem,calc(100vw-4rem))] overflow-y-auto rounded-md border border-line bg-white p-1 shadow-lg text-xs"
+          >
               {results.length === 0 ? (
                 <div className="px-3 py-2 text-muted text-center">
                   {loading ? "Searching faculty records..." : "No matching faculty found"}
@@ -271,6 +272,7 @@ export function CustomFacultySearch({
                       aria-selected={activeIndex === index}
                       aria-disabled={current}
                       disabled={current}
+                      tabIndex={-1}
                       onClick={() => choose(index)}
                       onMouseEnter={() => {
                         if (!current) setActiveIndex(index);
@@ -314,25 +316,30 @@ export function CustomFacultySearch({
                     </button>
                   );
                 })
-              )}
-            </div>
-          )}
+            )}
+          </div>
         </div>
 
         {/* Optional Course Selection if multiple program sheets */}
         {availableCourses.length > 1 && selectedFaculty ? (
-          <select
-            className="input text-xs py-1.5 w-24"
-            value={selectedCourseId ?? ""}
-            onChange={(e) => setSelectedCourseId(e.target.value ? Number(e.target.value) : null)}
-            title="Attach to program sheet"
-          >
-            {availableCourses.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.code}
-              </option>
-            ))}
-          </select>
+          <>
+            <label className="visually-hidden" htmlFor={courseSelectId}>
+              Attach to program sheet
+            </label>
+            <select
+              id={courseSelectId}
+              className="input text-xs py-1.5 w-24"
+              value={selectedCourseId ?? ""}
+              onChange={(e) => setSelectedCourseId(e.target.value ? Number(e.target.value) : null)}
+              title="Attach to program sheet"
+            >
+              {availableCourses.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.code}
+                </option>
+              ))}
+            </select>
+          </>
         ) : null}
 
         <button
@@ -348,10 +355,8 @@ export function CustomFacultySearch({
       {feedback ? (
         <div
           role={feedback.type === "success" ? "status" : "alert"}
-          className={`absolute left-0 top-full mt-1.5 z-40 rounded px-2.5 py-1 text-xs shadow-sm ${
-            feedback.type === "success"
-              ? "bg-emerald-50 border border-emerald-300 text-emerald-800"
-              : "bg-red-50 border border-red-300 text-red-700"
+          className={`status-inline mt-1.5 shadow-sm ${
+            feedback.type === "success" ? "status-inline-success" : "status-inline-error"
           }`}
         >
           {feedback.message}

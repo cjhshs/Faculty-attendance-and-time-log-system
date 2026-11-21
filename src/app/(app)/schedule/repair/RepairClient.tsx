@@ -63,7 +63,12 @@ export function RepairClient({
         apply.
       </p>
       {state.message ? (
-        <div className={"alert " + (state.ok ? "alert-success" : "alert-error")}>{state.message}</div>
+        <div
+          role={state.ok ? "status" : "alert"}
+          className={"alert " + (state.ok ? "alert-success" : "alert-error")}
+        >
+          {state.message}
+        </div>
       ) : null}
     </form>
   );

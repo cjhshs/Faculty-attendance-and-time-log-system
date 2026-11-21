@@ -346,7 +346,12 @@ export default async function SummaryPage({
                 {selectedFaculty.department ?? "No department assigned"}
               </span>
             </div>
-            <div className="overflow-x-auto">
+            <div
+              role="region"
+              aria-label="Daily breakdown"
+              tabIndex={0}
+              className="scroll-region overflow-x-auto"
+            >
               <table className="data-table">
                 <caption className="visually-hidden">Daily breakdown</caption>
                 <thead>
@@ -368,7 +373,7 @@ export default async function SummaryPage({
                       <td className="text-center">{row.scheduledHours}</td>
                       <td className="text-center text-green-700">{row.presentHours}</td>
                       <td className="text-center text-red-700">{row.absentHours}</td>
-                      <td className="text-center text-zinc-600">{row.unencodedHours}</td>
+                      <td className="text-center text-muted">{row.unencodedHours}</td>
                       <td>
                         {row.encoded ? (
                           <span className="badge badge-success">Encoded</span>
@@ -446,7 +451,7 @@ export default async function SummaryPage({
                   <td className="text-center">{f.encodedScheduledHours}</td>
                   <td className="text-center text-green-700">{f.presentHours}</td>
                   <td className="text-center text-red-700">{f.absentHours}</td>
-                  <td className="text-center text-zinc-600">{f.unencodedHours}</td>
+                  <td className="text-center text-muted">{f.unencodedHours}</td>
                   <td className="text-center">{f.presentDays}</td>
                   <td className="text-center">{f.absentDays}</td>
                   <td className="text-center">{f.partialDays}</td>

@@ -231,10 +231,11 @@ function ProgramSheetPage({
                   {(sheetKey || onRemoveFaculty) ? (
                     <button
                       type="button"
+                      aria-label={`Remove ${col.label} from this sheet`}
                       title={`Remove ${col.label} from this sheet`}
                       onClick={() => handleRemove(col.facultyId, col.label, Boolean(col.isCustom))}
                       disabled={removingId === col.facultyId}
-                      className="no-print ml-0.5 inline-flex h-4 w-4 items-center justify-center rounded text-slate-500 hover:bg-red-50 hover:text-red-600 transition-colors cursor-pointer text-xs leading-none"
+                      className="no-print ml-0.5 inline-flex h-4 min-w-6 items-center justify-center rounded text-muted transition-colors hover:bg-red-50 hover:text-red-600 cursor-pointer text-xs leading-none"
                     >
                       {removingId === col.facultyId ? "…" : "\u2212"}
                     </button>
@@ -267,8 +268,8 @@ function ProgramSheetPage({
                 if (cell === "empty") {
                   return (
                     <Fragment key={col.facultyId}>
-                      <td className="border border-black bg-zinc-50" />
-                      <td className="border border-black bg-zinc-50" />
+                      <td className="border border-black bg-slate-50" />
+                      <td className="border border-black bg-slate-50" />
                     </Fragment>
                   );
                 }
@@ -373,7 +374,7 @@ function SheetFoot({
             <p className="w-56 text-center text-[10px] italic">{header.preparedDesignation}</p>
           ) : null}
         </div>
-        <p className="shrink-0 text-[10px] text-zinc-600">
+        <p className="shrink-0 text-[10px] text-muted">
           Page {pageNumber} of {totalPages}
         </p>
         <div className="min-w-0 ml-auto">

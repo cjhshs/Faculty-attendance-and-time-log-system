@@ -50,7 +50,7 @@ export default async function DashboardPage({
             className="card transition-colors hover:border-navy-2 hover:shadow"
           >
             <p className="text-xs uppercase tracking-wide text-muted">{card.label}</p>
-            <p className="mt-1 text-2xl font-bold text-navy">{card.value}</p>
+            <p className="mt-1 text-2xl font-bold tabular-nums text-navy">{card.value}</p>
           </Link>
         ))}
       </div>

@@ -67,7 +67,8 @@ export function AttendancePicker({
       </div>
 
       {departmentPrograms.length > 1 ? (
-        <div className="space-y-2">
+        <fieldset className="space-y-2">
+          <legend className="visually-hidden">Filter programs in CET</legend>
           <div className="flex flex-wrap items-center gap-3">
             <p className="label mb-0 text-xs">Filter programs in CET (optional):</p>
             <button
@@ -124,7 +125,7 @@ export function AttendancePicker({
               );
             })}
           </div>
-        </div>
+        </fieldset>
       ) : null}
     </div>
   );
