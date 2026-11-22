@@ -1,6 +1,14 @@
 "use client";
 
-import { Fragment, useEffect, useId, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { ScrollArea } from "../../ScrollArea";
 import { useConfirm } from "../../confirm";
 import {
@@ -109,6 +117,14 @@ export function EncodeClient({
   // transient (never saved) and is cleared after a bulk action or a save.
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const lastSelected = useRef<{ col: number; row: number } | null>(null);
+  // Ctrl + W arms a column-drag selection. Dragging across faculty columns adds
+  // every scheduled hour in each touched column, and never expands to other
+  // columns or infers consecutive runs.
+  const columnDragArmed = useRef(false);
+  const columnDrag = useRef<{ active: boolean; columns: Set<number> } | null>(null);
+  const suppressCheckClick = useRef(false);
+  const [columnDragArmedLabel, setColumnDragArmedLabel] = useState(false);
+  const [columnDragging, setColumnDragging] = useState(false);
 
   // Autosave working state as a private draft. This never writes attendance.
   useEffect(() => {
@@ -162,6 +178,50 @@ export function EncodeClient({
     return () => window.removeEventListener("beforeunload", beforeUnload);
   }, [dirty]);
 
+  useEffect(() => {
+    function isColumnDragKey(event: KeyboardEvent) {
+      return (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "w";
+    }
+    function arm(event: KeyboardEvent) {
+      if (!isColumnDragKey(event)) return;
+      event.preventDefault();
+      columnDragArmed.current = true;
+      setColumnDragArmedLabel(true);
+    }
+    function disarm(event: KeyboardEvent) {
+      if (
+        event.key === "Control" ||
+        event.key === "Meta" ||
+        event.key.toLowerCase() === "w"
+      ) {
+        columnDragArmed.current = false;
+        setColumnDragArmedLabel(false);
+      }
+    }
+    function reset() {
+      columnDragArmed.current = false;
+      columnDrag.current = null;
+      setColumnDragArmedLabel(false);
+      setColumnDragging(false);
+    }
+    function finishDrag() {
+      columnDrag.current = null;
+      setColumnDragging(false);
+    }
+    window.addEventListener("keydown", arm);
+    window.addEventListener("keyup", disarm);
+    window.addEventListener("blur", reset);
+    window.addEventListener("pointerup", finishDrag);
+    window.addEventListener("pointercancel", finishDrag);
+    return () => {
+      window.removeEventListener("keydown", arm);
+      window.removeEventListener("keyup", disarm);
+      window.removeEventListener("blur", reset);
+      window.removeEventListener("pointerup", finishDrag);
+      window.removeEventListener("pointercancel", finishDrag);
+    };
+  }, []);
+
   const layout = useMemo(() => {
     return columns.map((_col, colIndex) => {
       const result: ({ room: string; span: number } | "covered" | "empty")[] = [];
@@ -198,6 +258,19 @@ export function EncodeClient({
     return set;
   }, [columns, trimmedQuery]);
   const filtering = trimmedQuery.length > 0;
+  // A column is highlighted as soon as any of its hourly entries is selected.
+  const selectedColumns = useMemo(() => {
+    const columnsWithSelection = new Set<number>();
+    columns.forEach((_col, colIndex) => {
+      if (rows.some((row) => {
+        const cell = row.cells[colIndex];
+        return !!cell && selected.has(cell.key);
+      })) {
+        columnsWithSelection.add(colIndex);
+      }
+    });
+    return columnsWithSelection;
+  }, [columns, rows, selected]);
 
   const allCells = rows.flatMap((row) => row.cells.filter((c): c is NonNullable<typeof c> => !!c));
   const presentCount = allCells.filter((c) => values[c.key]?.status === "present").length;
@@ -278,31 +351,52 @@ export function EncodeClient({
     lastSelected.current = null;
   }
 
-  // Select every scheduled hour that is part of a run of two or more
-  // back-to-back hours in its column (a class block), leaving isolated single
-  // hours untouched.
-  function selectConsecutiveCells() {
-    const next = new Set<string>();
-    columns.forEach((_col, colIndex) => {
-      let run: string[] = [];
-      const flush = () => {
-        if (run.length >= 2) for (const key of run) next.add(key);
-        run = [];
-      };
-      for (let r = 0; r < rows.length; r++) {
-        const cell = rows[r].cells[colIndex];
-        if (cell) run.push(cell.key);
-        else flush();
+  function selectColumn(colIndex: number) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const row of rows) {
+        const cell = row.cells[colIndex];
+        if (cell) next.add(cell.key);
       }
-      flush();
+      return next;
     });
-    setSelected(next);
     lastSelected.current = null;
+  }
+
+  function beginColumnDrag(event: ReactPointerEvent, colIndex: number) {
+    if (event.button !== 0) return;
+    if (!columnDragArmed.current || locked) {
+      suppressCheckClick.current = false;
+      return;
+    }
+    // Stop native text selection and the checkbox click that follows pointerdown.
+    event.preventDefault();
+    suppressCheckClick.current = true;
+    columnDrag.current = { active: true, columns: new Set([colIndex]) };
+    setColumnDragging(true);
+    selectColumn(colIndex);
+  }
+
+  function extendColumnDrag(colIndex: number) {
+    const drag = columnDrag.current;
+    if (!drag?.active || drag.columns.has(colIndex)) return;
+    drag.columns.add(colIndex);
+    selectColumn(colIndex);
+  }
+
+  function columnPointerProps(colIndex: number) {
+    return {
+      onPointerDown: (event: ReactPointerEvent) => beginColumnDrag(event, colIndex),
+      onPointerEnter: () => extendColumnDrag(colIndex),
+    };
   }
 
   function clearSelection() {
     setSelected(new Set());
     lastSelected.current = null;
+    columnDrag.current = null;
+    suppressCheckClick.current = false;
+    setColumnDragging(false);
   }
 
   // Apply Present/Absent to every selected hour at once. Overwriting an hour
@@ -620,15 +714,6 @@ export function EncodeClient({
         </button>
         <button
           type="button"
-          className="btn btn-sm"
-          onClick={selectConsecutiveCells}
-          disabled={locked || allCells.length === 0}
-          title="Select every run of back-to-back hours in each column"
-        >
-          Select all consecutive
-        </button>
-        <button
-          type="button"
           className="btn btn-sm btn-primary"
           onClick={() => bulkApply("present")}
           disabled={locked || selected.size === 0}
@@ -651,8 +736,9 @@ export function EncodeClient({
         >
           Cancel
         </button>
-        <span className="text-muted">
-          Tick hourly entries (Shift-click for a range), then mark them in one go.
+        <span className={columnDragArmedLabel ? "text-blue-700" : "text-muted"}>
+          Hold Ctrl + W and drag across columns to select every hour in those columns. Shift-click
+          still selects a row range.
         </span>
       </div>
 
@@ -660,7 +746,7 @@ export function EncodeClient({
         className="rounded-md border border-line bg-white"
         label="Attendance encoding grid"
       >
-        <table className="w-full border-collapse text-xs">
+        <table className={"w-full border-collapse text-xs " + (columnDragging ? "select-none" : "")}>
           <thead>
             <tr>
               <th
@@ -672,6 +758,12 @@ export function EncodeClient({
               </th>
               {columns.map((col, colIndex) => {
                 const matched = matchedColumns.has(colIndex);
+                const columnSelected = selectedColumns.has(colIndex);
+                const headerTone = columnSelected
+                  ? "bg-blue-50 text-navy"
+                  : filtering && !matched
+                    ? "bg-slate-50 text-muted"
+                    : "bg-slate-100";
                 return (
                   <th
                     key={col.facultyId}
@@ -679,8 +771,10 @@ export function EncodeClient({
                     scope="colgroup"
                     className={
                       "min-w-[15rem] border border-line px-2 py-1 text-center font-bold " +
-                      (filtering && !matched ? "bg-slate-50 text-muted" : "bg-slate-100")
+                      headerTone +
+                      (columnSelected ? " outline outline-2 -outline-offset-2 outline-blue-600" : "")
                     }
+                    {...columnPointerProps(colIndex)}
                   >
                     {col.label}
                   </th>
@@ -688,10 +782,22 @@ export function EncodeClient({
               })}
             </tr>
             <tr>
-              {columns.map((col) => (
+              {columns.map((col, colIndex) => (
                 <Fragment key={col.facultyId}>
-                  <th scope="col" className="border border-line bg-slate-100 px-2 py-1 text-xs">ROOM</th>
-                  <th scope="col" className="border border-line bg-slate-100 px-2 py-1 text-xs">ENTRY</th>
+                  <th
+                    scope="col"
+                    className="border border-line bg-slate-100 px-2 py-1 text-xs"
+                    {...columnPointerProps(colIndex)}
+                  >
+                    ROOM
+                  </th>
+                  <th
+                    scope="col"
+                    className="border border-line bg-slate-100 px-2 py-1 text-xs"
+                    {...columnPointerProps(colIndex)}
+                  >
+                    ENTRY
+                  </th>
                 </Fragment>
               ))}
             </tr>
@@ -727,9 +833,14 @@ export function EncodeClient({
                         cellStatus === "absent" && (cellValue?.reason ?? "").trim().length < 2
                       }
                       checked={selected.has(cell.key)}
-                      onToggleCheck={(shiftKey) =>
-                        toggleSelect(cell.key, colIndex, rowIndex, shiftKey)
-                      }
+                      onToggleCheck={(shiftKey) => {
+                        if (suppressCheckClick.current) {
+                          suppressCheckClick.current = false;
+                          return;
+                        }
+                        if (columnDragArmed.current || columnDrag.current?.active) return;
+                        toggleSelect(cell.key, colIndex, rowIndex, shiftKey);
+                      }}
                       setStatus={(status) => setStatus(cell.key, status)}
                       update={update}
                     />
@@ -737,7 +848,13 @@ export function EncodeClient({
                     <span className="text-muted">—</span>
                   );
                   const entryCellClass =
-                    "min-w-[11rem] border border-line px-1 py-1 " + statusClass + " " + dimClass;
+                    "min-w-[11rem] border border-line px-1 py-1 " +
+                    statusClass +
+                    " " +
+                    dimClass +
+                    (cell && selected.has(cell.key)
+                      ? " outline outline-2 -outline-offset-2 outline-blue-600"
+                      : "");
                   if (spot && typeof spot === "object") {
                     return (
                       <Fragment key={col.facultyId}>
@@ -747,24 +864,37 @@ export function EncodeClient({
                             "min-w-[6rem] border border-line px-1 py-1 text-center align-middle text-xs font-medium " +
                             dimClass
                           }
+                          {...columnPointerProps(colIndex)}
                         >
                           {spot.room}
                         </td>
-                        <td className={entryCellClass}>{entry}</td>
+                        <td className={entryCellClass} {...columnPointerProps(colIndex)}>
+                          {entry}
+                        </td>
                       </Fragment>
                     );
                   }
                   if (spot === "covered") {
                     return (
-                      <td key={`${col.facultyId}-e`} className={entryCellClass}>
+                      <td
+                        key={`${col.facultyId}-e`}
+                        className={entryCellClass}
+                        {...columnPointerProps(colIndex)}
+                      >
                         {entry}
                       </td>
                     );
                   }
                   return (
                     <Fragment key={col.facultyId}>
-                      <td className="border border-line bg-slate-50" />
-                      <td className="border border-line bg-slate-50" />
+                      <td
+                        className="border border-line bg-slate-50"
+                        {...columnPointerProps(colIndex)}
+                      />
+                      <td
+                        className="border border-line bg-slate-50"
+                        {...columnPointerProps(colIndex)}
+                      />
                     </Fragment>
                   );
                 })}
@@ -886,7 +1016,7 @@ function EntryControl({
             checked={checked}
             disabled={locked}
             aria-label={`Select hour ${cell.key}`}
-            title="Select this hour (Shift-click for a range)"
+            title="Select this hour (Shift-click for a range; Ctrl + W and drag to select columns)"
             // The checkbox is fully controlled by `selected`; the native change is
             // ignored and the click (with its shiftKey) drives the selection. Not
             // calling preventDefault lets React reconcile the controlled `checked`

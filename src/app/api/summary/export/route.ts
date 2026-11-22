@@ -5,6 +5,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { buildSummary } from "@/lib/summary";
 import { resolveSummaryRange } from "@/lib/summary-range";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
+import { CET_COLLEGE_CODE } from "@/lib/college-catalog";
 import { formatISODate, todayUtc } from "@/lib/dates";
 import { getActiveTerm, parseTerm, isValidTerm } from "@/lib/terms";
 import { writeAudit } from "@/lib/audit";
@@ -41,7 +42,8 @@ export async function GET(request: Request) {
 
   const programCode = url.searchParams.get("program");
   const collegeCode = url.searchParams.get("college");
-  const departmentCode = (url.searchParams.get("department") ?? "").trim();
+  // Exports are CET-only even when the link omits or overrides `department`.
+  const departmentCode: string = CET_COLLEGE_CODE;
   const collegeOptions = await getCollegeOptions();
   const scope = normalizeScopeSelection(collegeOptions, {
     college: collegeCode,

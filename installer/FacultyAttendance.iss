@@ -10,7 +10,7 @@
 
 #define AppName "Faculty Attendance and Time Log System"
 #define AppShortName "FacultyAttendance"
-#define AppVersion "1.0.2"
+#define AppVersion "1.0.4"
 #define AppPublisher "Ramon Magsaysay Memorial Colleges, Inc."
 #define AppIdGuid "600B8AEA-0913-4CAE-A52E-E9AA0B652231"
 
@@ -38,7 +38,7 @@ RestartApplications=no
 AllowNoIcons=yes
 SetupLogging=yes
 UninstallDisplayName={#AppName}
-VersionInfoVersion=1.0.2.0
+VersionInfoVersion=1.0.4.0
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked

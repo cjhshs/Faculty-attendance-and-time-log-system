@@ -4,6 +4,7 @@ import { PERMISSIONS } from "@/lib/permissions";
 import { getCourses } from "@/lib/data";
 import { prisma } from "@/lib/prisma";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
+import { CET_COLLEGE_CODE } from "@/lib/college-catalog";
 import { buildSummary } from "@/lib/summary";
 import { resolveSummaryRange } from "@/lib/summary-range";
 import { formatISODate, todayUtc } from "@/lib/dates";
@@ -62,7 +63,9 @@ export default async function SummaryPage({
   const { start, end } = range;
 
   const q = (params.q ?? "").trim().toLowerCase();
-  const department = (params.department ?? "CET").trim() || "CET";
+  // The Attendance Summary is CET-only. A saved or hand-edited department query
+  // parameter must never widen the roster or course scope to another college.
+  const department: string = CET_COLLEGE_CODE;
   const [courses, collegeOptions, unassignedFaculty] = await Promise.all([
     getCourses(),
     getCollegeOptions(),
@@ -263,7 +266,7 @@ export default async function SummaryPage({
           program={scope.program ?? ""}
           idPrefix="summary"
         />
-        <input type="hidden" name="department" value="CET" />
+        <input type="hidden" name="department" value={department} />
         <div className="min-w-56 flex-1">
           <label className="label" htmlFor="q">
             Find faculty

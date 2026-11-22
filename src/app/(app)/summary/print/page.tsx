@@ -7,6 +7,7 @@ import { resolveSummaryRange } from "@/lib/summary-range";
 import { formatISODate, todayUtc } from "@/lib/dates";
 import { getActiveTerm, parseTerm, isValidTerm } from "@/lib/terms";
 import { getCollegeOptions, normalizeScopeSelection } from "@/lib/colleges";
+import { CET_COLLEGE_CODE } from "@/lib/college-catalog";
 import { AutoPrint } from "../../attendance/AutoPrint";
 import { PrintButton } from "../../attendance/PrintButton";
 
@@ -40,7 +41,8 @@ export default async function SummaryPrintPage({
   const { start, end } = range;
 
   const collegeOptions = await getCollegeOptions();
-  const department = (params.department ?? "CET").trim() || "CET";
+  // Print follows the same immutable CET roster scope as the summary screen.
+  const department: string = CET_COLLEGE_CODE;
   const scope = normalizeScopeSelection(collegeOptions, {
     college: params.college,
     program: params.program,

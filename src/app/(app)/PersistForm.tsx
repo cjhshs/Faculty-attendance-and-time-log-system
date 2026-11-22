@@ -53,6 +53,14 @@ export function PersistForm({
         }
         const name = element.name;
         if (!name || !(name in saved)) continue;
+        // Hidden fields are server-controlled scope constants, not user filters.
+        // Restoring stale values into them can silently widen a CET-only page.
+        if (
+          element instanceof HTMLInputElement &&
+          (element.type === "hidden" || element.type === "submit" || element.type === "button")
+        ) {
+          continue;
+        }
         // Date inputs must always initialize to today's local date unless explicitly in the URL;
         // never overwrite them with a stale date saved from a previous session.
         if (
@@ -110,6 +118,7 @@ export function PersistForm({
       }
       const name = element.name;
       if (!name || name === "listed") continue;
+      if (element instanceof HTMLInputElement && element.type === "hidden") continue;
       if (element instanceof HTMLInputElement) {
         if (element.type === "checkbox") {
           if (!element.checked) continue;
